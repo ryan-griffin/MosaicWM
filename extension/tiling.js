@@ -68,6 +68,9 @@ export const TilingManager = GObject.registerClass({
 
     // Effective size: pending async sizes → frame rect → saved sizes → fallback
     getEffectiveWindowSize(window) {
+        const miniSize = getMiniatureSize(window);
+        if (miniSize) return miniSize;
+
         const smartSize = WindowState.get(window, 'targetSmartResizeSize');
         if (smartSize) {
             return { width: smartSize.width, height: smartSize.height };
