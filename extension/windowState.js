@@ -39,3 +39,8 @@ export function getState(window) {
 export function clear(window) {
     windowStates.delete(window);
 }
+
+export const IS_MINIATURE          = 'isMiniature';
+export const MINIATURE_SCALE       = 'miniatureScale';
+export const PRE_MINIATURE_SIZE    = 'preMiniatureSize';
+export const MINIATURE_TARGET_POS  = 'miniatureTargetPos';
