@@ -372,11 +372,74 @@ export default class WindowMosaicExtension extends Extension {
     }
 
     _onFocusWindowChanged() {
-        // Stub — full implementation in Task 8
+        const window = global.display.focus_window;
+        if (!window) return;
+
+        const prevFocusedId = this._lastFocusedWindowId;
+        this._lastFocusedWindowId = window.get_id();
+
+        if (!this.windowingManager.isRelated(window)) return;
+        if (this.windowingManager.isExcluded(window)) return;
+        if (this.windowingManager.isMaximizedOrFullscreen(window)) return;
+        if (!WindowState.get(window, IS_MINIATURE)) return;
+        if (WindowState.get(window, 'justMiniaturized')) return;
+        if (this.tilingManager._isSmartResizingBlocked) return;
+
+        const windowId = window.get_id();
+
+        if (this._miniatureCascadeIds?.has(windowId)) {
+            if (prevFocusedId !== windowId) {
+                // User deliberately focused it after focusing something else → allow restore
+                this._miniatureCascadeIds.delete(windowId);
+            } else {
+                // Auto-focused during cascade → block; activate a non-miniature window instead
+                const ws  = window.get_workspace();
+                const mon = window.get_monitor();
+                const nonMiniature = this.windowingManager.getMonitorWorkspaceWindows(ws, mon)
+                    .find(w => !WindowState.get(w, IS_MINIATURE) && !this.windowingManager.isExcluded(w));
+                if (nonMiniature) nonMiniature.activate(global.get_current_time());
+                return;
+            }
+        }
+
+        this._miniatureCascadeIds.clear();
+        this.tilingManager._isSmartResizingBlocked = true;
+        WindowState.set(window, 'restoringFromMiniature', true);
+
+        this.miniatureManager.restoreMiniature(window, null);
+        // 'miniature-restored' signal fires synchronously → _onMiniatureRestored runs next
     }
 
-    _onMiniatureRestored(_window) {
-        // Stub — full implementation in Task 9
+    _onMiniatureRestored(window) {
+        WindowState.remove(window, 'restoringFromMiniature');
+        this.tilingManager._isSmartResizingBlocked = false;
+
+        const workspace = window.get_workspace();
+        if (!workspace) return;
+        const monitor = window.get_monitor();
+        const workArea = workspace.get_work_area_for_monitor(monitor);
+
+        const existingWindows = this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor)
+            .filter(w =>
+                w.get_id() !== window.get_id() &&
+                !this.edgeTilingManager.isEdgeTiled(w) &&
+                !WindowState.get(w, 'pendingInQueue') &&
+                !WindowState.get(w, IS_MINIATURE) &&
+                !this.windowingManager.isMaximizedOrFullscreen(w)
+            );
+
+        const resizeOk = this.tilingManager.tryFitWithResize(window, existingWindows, workArea);
+
+        if (resizeOk) {
+            this.tilingManager._isSmartResizingBlocked = true;
+            try {
+                this.tilingManager.tileWorkspaceWindows(workspace, null, monitor, false);
+            } finally {
+                this.tilingManager._isSmartResizingBlocked = false;
+            }
+        } else {
+            this.tilingManager.tileWorkspaceWindows(workspace, window, monitor, false);
+        }
     }
 
     _setupKeybindings() {
