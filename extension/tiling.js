@@ -9,6 +9,11 @@ import * as Logger from './logger.js';
 import * as constants from './constants.js';
 import { TileZone } from './constants.js';
 import * as WindowState from './windowState.js';
+import {
+    IS_MINIATURE,
+    MINIATURE_TARGET_POS,
+} from './windowState.js';
+import { getMiniatureSize } from './miniature.js';
 
 export const ComputedLayouts = new WeakMap();
 
@@ -2291,26 +2296,34 @@ class WindowDescriptor {
         this.x = frame.x;
         this.y = frame.y;
         this.metaWindow = meta_window;
-        
-        // Use target dimensions if unmaximizing, as physical frame might still be maximized.
-        const targetSize = WindowState.get(meta_window, 'targetRestoredSize');
-        // Use smart resize target dims if move_resize_frame hasn't completed yet.
-        const smartResizeSize = WindowState.get(meta_window, 'targetSmartResizeSize');
-        
-        if (targetSize) {
-            this.width = targetSize.width;
-            this.height = targetSize.height;
-            Logger.log(`WindowDescriptor: Using targetRestoredSize ${this.width}x${this.height} for ${meta_window.get_id()}`);
-        } else if (smartResizeSize) {
-            this.width = smartResizeSize.width;
-            this.height = smartResizeSize.height;
-            Logger.log(`WindowDescriptor: Using targetSmartResizeSize ${this.width}x${this.height} for ${meta_window.get_id()}`);
+
+        // Miniature size takes first priority
+        const miniSize = getMiniatureSize(meta_window);
+        if (miniSize) {
+            this.width  = miniSize.width;
+            this.height = miniSize.height;
+            Logger.log(`WindowDescriptor: Using miniatureSize ${this.width}x${this.height} for ${meta_window.get_id()}`);
         } else {
-            // Use actual frame dimensions — no hardcoded fallback
-            this.width = frame.width > 0 ? frame.width : 1;
-            this.height = frame.height > 0 ? frame.height : 1;
+            // Use target dimensions if unmaximizing, as physical frame might still be maximized.
+            const targetSize = WindowState.get(meta_window, 'targetRestoredSize');
+            // Use smart resize target dims if move_resize_frame hasn't completed yet.
+            const smartResizeSize = WindowState.get(meta_window, 'targetSmartResizeSize');
+
+            if (targetSize) {
+                this.width = targetSize.width;
+                this.height = targetSize.height;
+                Logger.log(`WindowDescriptor: Using targetRestoredSize ${this.width}x${this.height} for ${meta_window.get_id()}`);
+            } else if (smartResizeSize) {
+                this.width = smartResizeSize.width;
+                this.height = smartResizeSize.height;
+                Logger.log(`WindowDescriptor: Using targetSmartResizeSize ${this.width}x${this.height} for ${meta_window.get_id()}`);
+            } else {
+                // Use actual frame dimensions — no hardcoded fallback
+                this.width = frame.width > 0 ? frame.width : 1;
+                this.height = frame.height > 0 ? frame.height : 1;
+            }
         }
-        
+
         this.id = meta_window.get_id();
     }
     
@@ -2355,8 +2368,22 @@ class WindowDescriptor {
                 }
             }
         } else {
-            WindowState.set(window, 'isConstrainedByMosaic', true);
-            window.move_resize_frame(false, x, y, this.width, this.height);
+            const isMiniature = WindowState.get(window, IS_MINIATURE);
+            if (isMiniature) {
+                const currentRect = window.get_frame_rect();
+                if (currentRect.x !== x || currentRect.y !== y)
+                    window.move_frame(false, x, y);
+                const windowActor = window.get_compositor_private();
+                if (windowActor) {
+                    windowActor.set_pivot_point(0, 0);
+                    const [ax, ay] = windowActor.get_position();
+                    windowActor.set_translation(x - ax, y - ay, 0);
+                    WindowState.set(window, MINIATURE_TARGET_POS, { x, y });
+                }
+            } else {
+                WindowState.set(window, 'isConstrainedByMosaic', true);
+                window.move_resize_frame(false, x, y, this.width, this.height);
+            }
         }
     } else {
         Logger.warn(`Could not find window with ID ${this.id} for drawing`);
