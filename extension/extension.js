@@ -28,9 +28,9 @@ import { TimeoutRegistry, afterAnimations } from './timing.js';
 import { WindowHandler } from './windowHandler.js';
 import { DragHandler } from './dragHandler.js';
 import { ResizeHandler } from './resizeHandler.js';
-import { MiniatureManager } from './miniature.js';
+import { MiniatureManager, applyMiniatureActorState } from './miniature.js';
 import * as WindowState from './windowState.js';
-import { IS_MINIATURE } from './windowState.js';
+import { IS_MINIATURE, MINIATURE_SCALE, MINIATURE_EXT_LEFT, MINIATURE_EXT_TOP, MINIATURE_TARGET_POS } from './windowState.js';
 import { MosaicIndicator } from './quickSettings.js';
 
 // Module-level accessor for TilingManager (used by overviewLayout.js for on-demand cache)
@@ -141,6 +141,33 @@ export default class WindowMosaicExtension extends Extension {
         // This prevents race conditions where tiling starts while animation is still running
         afterAnimations(this.animationsManager, () => {
             Logger.log(`Workspace animation complete - ready for operations on workspace ${newIndex}`);
+            // Re-apply miniature transforms after workspace switch.
+            // Mutter may have moved actors to default positions while offscreen.
+            const reapplyMiniatures = () => {
+                const windows = newWorkspace.list_windows();
+                for (const w of windows) {
+                    if (WindowState.get(w, IS_MINIATURE)) {
+                        const actor = w.get_compositor_private();
+                        if (actor) {
+                            const sc = WindowState.get(w, MINIATURE_SCALE) ?? 1;
+                            const extL = WindowState.get(w, MINIATURE_EXT_LEFT) ?? 0;
+                            const extT = WindowState.get(w, MINIATURE_EXT_TOP) ?? 0;
+                            const target = WindowState.get(w, MINIATURE_TARGET_POS);
+                            if (target) {
+                                applyMiniatureActorState(actor, sc, extL, extT, target.x, target.y);
+                                const [ax, ay] = actor.get_position();
+                                Logger.log(`[MINIATURE] ws-switch re-apply ${w.get_id()}: actor=(${ax},${ay}) target=(${target.x},${target.y})`);
+                            }
+                        }
+                    }
+                }
+            };
+            // Apply once after animation, then again after Mutter settles
+            reapplyMiniatures();
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                reapplyMiniatures();
+                return GLib.SOURCE_REMOVE;
+            });
         }, this._timeoutRegistry);
     };
 
@@ -382,14 +409,22 @@ export default class WindowMosaicExtension extends Extension {
         if (this.windowingManager.isExcluded(window)) return;
         if (this.windowingManager.isMaximizedOrFullscreen(window)) return;
         if (!WindowState.get(window, IS_MINIATURE)) return;
-        if (WindowState.get(window, 'justMiniaturized')) return;
-        if (this.tilingManager._isSmartResizingBlocked) return;
+        if (WindowState.get(window, 'justMiniaturized')) {
+            Logger.log(`[FOCUS] Skip restore ${window.get_id()}: justMiniaturized`);
+            return;
+        }
+        if (this.tilingManager._isSmartResizingBlocked) {
+            Logger.log(`[FOCUS] Skip restore ${window.get_id()}: smartResizingBlocked`);
+            return;
+        }
 
         const windowId = window.get_id();
+        Logger.log(`[FOCUS] Miniature focused ${windowId} (prev=${prevFocusedId}) cascade=${this._miniatureCascadeIds?.has(windowId)}`);
 
         if (this._miniatureCascadeIds?.has(windowId)) {
             if (prevFocusedId !== windowId) {
                 // User deliberately focused it after focusing something else → allow restore
+                Logger.log(`[FOCUS] Allow restore ${windowId} (deliberate, prev=${prevFocusedId})`);
                 this._miniatureCascadeIds.delete(windowId);
             } else {
                 // Auto-focused during cascade → block; activate a non-miniature window instead
@@ -397,11 +432,13 @@ export default class WindowMosaicExtension extends Extension {
                 const mon = window.get_monitor();
                 const nonMiniature = this.windowingManager.getMonitorWorkspaceWindows(ws, mon)
                     .find(w => !WindowState.get(w, IS_MINIATURE) && !this.windowingManager.isExcluded(w));
+                Logger.log(`[FOCUS] Block cascade restore ${windowId} → activating ${nonMiniature?.get_id() ?? 'none'}`);
                 if (nonMiniature) nonMiniature.activate(global.get_current_time());
                 return;
             }
         }
 
+        Logger.log(`[FOCUS] Triggering restore ${windowId}`);
         this._miniatureCascadeIds.clear();
         this.tilingManager._isSmartResizingBlocked = true;
         WindowState.set(window, 'restoringFromMiniature', true);
@@ -411,6 +448,7 @@ export default class WindowMosaicExtension extends Extension {
     }
 
     _onMiniatureRestored(window) {
+        Logger.log(`[FOCUS] _onMiniatureRestored ${window.get_id()} (${window.get_wm_class?.() ?? '?'}): running smart resize`);
         WindowState.remove(window, 'restoringFromMiniature');
         this.tilingManager._isSmartResizingBlocked = false;
 

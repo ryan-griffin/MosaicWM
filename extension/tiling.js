@@ -3,6 +3,7 @@
 // Core mosaic tiling algorithm and layout management
 
 import Clutter from 'gi://Clutter'; // Used for Enums (AnimationMode, etc)
+import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 
 import * as Logger from './logger.js';
@@ -11,9 +12,12 @@ import { TileZone } from './constants.js';
 import * as WindowState from './windowState.js';
 import {
     IS_MINIATURE,
+    MINIATURE_SCALE,
     MINIATURE_TARGET_POS,
+    MINIATURE_EXT_LEFT,
+    MINIATURE_EXT_TOP,
 } from './windowState.js';
-import { getMiniatureSize } from './miniature.js';
+import { getMiniatureSize, applyMiniatureActorState } from './miniature.js';
 
 export const ComputedLayouts = new WeakMap();
 
@@ -684,9 +688,19 @@ export const TilingManager = GObject.registerClass({
         
         for (const w of windows) {
             let placed = false;
-            
-            // Try to fit in existing column
+            const wIsMini = w.metaWindow && WindowState.get(w.metaWindow, IS_MINIATURE);
+
+            // Try to fit in existing column. Miniatures and regular windows
+            // never share a column — keeps spacing uniform (mini's column width
+            // matches the mini's width, so adjacent gaps stay at WINDOW_SPACING).
             for (const col of columns) {
+                const colHasMini = col.windows.some(cw =>
+                    cw.metaWindow && WindowState.get(cw.metaWindow, IS_MINIATURE));
+                const colHasRegular = col.windows.some(cw =>
+                    !cw.metaWindow || !WindowState.get(cw.metaWindow, IS_MINIATURE));
+                if (wIsMini && colHasRegular) continue;
+                if (!wIsMini && colHasMini) continue;
+
                 const newHeight = col.height + (col.height > 0 ? spacing : 0) + w.height;
                 if (newHeight <= work_area.height) {
                     col.windows.push(w);
@@ -696,7 +710,7 @@ export const TilingManager = GObject.registerClass({
                     break;
                 }
             }
-            
+
             // If doesn't fit anywhere, create new column
             if (!placed) {
                 const totalWidth = columns.reduce((s, c) => s + c.width, 0) + 
@@ -1235,10 +1249,34 @@ export const TilingManager = GObject.registerClass({
                         const window = meta_windows.find(w => w.get_id() === windowDesc.id);
                         if (window) {
                             if (WindowState.get(window, IS_MINIATURE)) {
-                                window.move_frame(false, x, y + y_offset);
+                                const tx = x;
+                                const ty = y + y_offset;
+                                // Do NOT move_frame for miniatures (Mutter may reject)
+                                const actor = window.get_compositor_private();
+                                const sc = WindowState.get(window, MINIATURE_SCALE) ?? 1;
+                                const extL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
+                                const extT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
+                                if (actor) {
+                                    applyMiniatureActorState(actor, sc, extL, extT, tx, ty);
+                                    WindowState.set(window, MINIATURE_TARGET_POS, { x: tx, y: ty });
+                                }
+                                Logger.log(`[MINIATURE] animateTile H ${window.get_id()}: target=(${tx},${ty}) scale=${sc.toFixed(4)} extLeft=${extL} extTop=${extT} size=${windowDesc.width}x${windowDesc.height}`);
+                                const _vActor = window.get_compositor_private();
+                                const _vWinId = window.get_id();
+                                const _vSc = sc; const _vExtL = extL; const _vExtT = extT;
+                                const _vTarget = { x: tx, y: ty };
+                                if (_vActor) GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                                    const [ax, ay] = _vActor.get_position();
+                                    const t = _vActor.get_translation();
+                                    const vLeft = ax + t[0] + _vExtL * _vSc;
+                                    const vTop = ay + t[1] + _vExtT * _vSc;
+                                    Logger.log(`[MINIATURE] VERIFY-H ${_vWinId}: actor=(${ax},${ay}) trans=(${t[0]?.toFixed(2)},${t[1]?.toFixed(2)}) visualFrame=(${vLeft.toFixed(1)},${vTop.toFixed(1)}) expected=(${_vTarget.x},${_vTarget.y}) diff=(${(vLeft - _vTarget.x).toFixed(1)},${(vTop - _vTarget.y).toFixed(1)})`);
+                                    return GLib.SOURCE_REMOVE;
+                                });
                             } else if (windowDesc.id === resizingWindowId) {
                                 window.move_frame(false, x, y + y_offset);
                             } else {
+                                Logger.log(`[LAYOUT] H window ${window.get_id()}: target=(${x},${y + y_offset}) size=${windowDesc.width}x${windowDesc.height}`);
                                 windowLayouts.push({
                                     window: window,
                                     rect: {
@@ -1267,10 +1305,32 @@ export const TilingManager = GObject.registerClass({
                         const window = meta_windows.find(w => w.get_id() === windowDesc.id);
                         if (window) {
                             if (WindowState.get(window, IS_MINIATURE)) {
-                                window.move_frame(false, targetX, targetY);
+                                // Do NOT move_frame for miniatures (Mutter may reject)
+                                const actor = window.get_compositor_private();
+                                const sc = WindowState.get(window, MINIATURE_SCALE) ?? 1;
+                                const extL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
+                                const extT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
+                                if (actor) {
+                                    applyMiniatureActorState(actor, sc, extL, extT, targetX, targetY);
+                                    WindowState.set(window, MINIATURE_TARGET_POS, { x: targetX, y: targetY });
+                                }
+                                Logger.log(`[MINIATURE] animateTile V ${window.get_id()}: target=(${targetX},${targetY}) scale=${sc.toFixed(4)} extLeft=${extL} extTop=${extT} size=${windowDesc.width}x${windowDesc.height}`);
+                                const _vActor = window.get_compositor_private();
+                                const _vWinId = window.get_id();
+                                const _vSc = sc; const _vExtL = extL; const _vExtT = extT;
+                                const _vTarget = { x: targetX, y: targetY };
+                                if (_vActor) GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                                    const [ax, ay] = _vActor.get_position();
+                                    const t = _vActor.get_translation();
+                                    const vLeft = ax + t[0] + _vExtL * _vSc;
+                                    const vTop = ay + t[1] + _vExtT * _vSc;
+                                    Logger.log(`[MINIATURE] VERIFY-V ${_vWinId}: actor=(${ax},${ay}) trans=(${t[0]?.toFixed(2)},${t[1]?.toFixed(2)}) visualFrame=(${vLeft.toFixed(1)},${vTop.toFixed(1)}) expected=(${_vTarget.x},${_vTarget.y}) diff=(${(vLeft - _vTarget.x).toFixed(1)},${(vTop - _vTarget.y).toFixed(1)})`);
+                                    return GLib.SOURCE_REMOVE;
+                                });
                             } else if (windowDesc.id === resizingWindowId) {
                                 window.move_frame(false, targetX, targetY);
                             } else {
+                                Logger.log(`[LAYOUT] V window ${window.get_id()}: target=(${targetX},${targetY}) size=${windowDesc.width}x${windowDesc.height}`);
                                 windowLayouts.push({
                                     window: window,
                                     rect: {
@@ -2457,19 +2517,20 @@ class WindowDescriptor {
         } else {
             const isMiniature = WindowState.get(window, IS_MINIATURE);
             if (isMiniature) {
-                const currentRect = window.get_frame_rect();
-                if (currentRect.x !== x || currentRect.y !== y)
-                    window.move_frame(false, x, y);
+                    // Do NOT move_frame for miniatures (Mutter may reject)
                 const windowActor = window.get_compositor_private();
                 if (windowActor) {
-                    windowActor.set_pivot_point(0, 0);
-                    const [ax, ay] = windowActor.get_position();
-                    windowActor.set_translation(x - ax, y - ay, 0);
+                    const sc = WindowState.get(window, MINIATURE_SCALE) ?? 1;
+                    const extL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
+                    const extT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
+                    applyMiniatureActorState(windowActor, sc, extL, extT, x, y);
                     WindowState.set(window, MINIATURE_TARGET_POS, { x, y });
+                    Logger.log(`[MINIATURE] draw ${window.get_id()}: target=(${x},${y}) scale=${sc.toFixed(4)} extLeft=${extL} extTop=${extT} size=${this.width}x${this.height}`);
                 }
             } else {
                 WindowState.set(window, 'isConstrainedByMosaic', true);
                 window.move_resize_frame(false, x, y, this.width, this.height);
+                Logger.log(`[LAYOUT] draw ${window.get_id()}: target=(${x},${y}) size=${this.width}x${this.height}`);
             }
         }
     } else {
