@@ -80,7 +80,7 @@ export default class WindowMosaicExtension extends Extension {
         this._injectionManager = null;
 
         // Centralized timeout management for async operations
-        this._timeoutRegistry = new TimeoutRegistry();
+        this._timeoutRegistry = null; // created in enable()
 
         // Per-workspace toggle for mosaic behavior.
         this._disabledWorkspaceStates = new WeakMap();
@@ -166,6 +166,7 @@ export default class WindowMosaicExtension extends Extension {
     enable() {
         Logger.info('Starting Mosaic layout manager.');
 
+        this._timeoutRegistry = new TimeoutRegistry();
         // Get workspace manager reference
         this._workspaceManager = global.workspace_manager;
 
@@ -659,7 +660,7 @@ export default class WindowMosaicExtension extends Extension {
             if (this._miniatureRestoredId)
                 this.miniatureManager.disconnect(this._miniatureRestoredId);
             this._miniatureRestoredId = 0;
-            this.miniatureManager.run_dispose();
+            this.miniatureManager.destroy();
             this.miniatureManager = null;
         }
 
@@ -718,6 +719,11 @@ export default class WindowMosaicExtension extends Extension {
         this.drawingManager = null;
         this.animationsManager = null;
         this.windowingManager = null;
+        this._timeoutRegistry = null;
+        this._mutterSettings = null;
+        this._settingsOverrider = null;
+        this._injectionManager = null;
+        this._workspaceManager = null;
 
         // Clean up handler classes
         if (this.resizeHandler) this.resizeHandler.destroy();

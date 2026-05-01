@@ -217,6 +217,14 @@ export const MiniatureManager = GObject.registerClass({
         Logger.log(`[MINIATURE] Destroyed miniature ${window.get_id()} (window closed)`);
     }
 
+
+    destroy() {
+        for (const id of this._miniatureWindows) {
+            const window = global.display.find_window_by_id?.(id);
+            if (window) this.destroyMiniature(window);
+        }
+        this._miniatureWindows.clear();
+    }
     getMiniatureSize(window) {
         if (!WindowState.get(window, IS_MINIATURE)) return null;
         const preSize = WindowState.get(window, PRE_MINIATURE_SIZE);
