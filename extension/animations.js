@@ -160,8 +160,8 @@ export const AnimationsManager = GObject.registerClass({
         const scaleX = currentRect.width / targetRect.width;
         const scaleY = currentRect.height / targetRect.height;
         
-        let translateX = currentRect.x - targetRect.x;
-        let translateY = currentRect.y - targetRect.y;
+        const translateX = currentRect.x - targetRect.x;
+        const translateY = currentRect.y - targetRect.y;
         
         const hasValidDimensions = currentRect.width > 0 && currentRect.height > 0 && 
                                     targetRect.width > 0 && targetRect.height > 0 &&

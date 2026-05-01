@@ -79,7 +79,6 @@ const MiniatureEnforceEffect = GObject.registerClass({
             const ty = tgt.y - ay - extT * sc;
             actor.set_translation(tx, ty, 0);
         }
-
         super.vfunc_paint(...args);
     }
 });

@@ -31,7 +31,7 @@ import { DragHandler } from './dragHandler.js';
 import { ResizeHandler } from './resizeHandler.js';
 import { MiniatureManager } from './miniature.js';
 import * as WindowState from './windowState.js';
-import { IS_MINIATURE } from './windowState.js';
+import { IS_MINIATURE, MINIATURE_SCALE, MINIATURE_EXT_LEFT, MINIATURE_EXT_TOP, MINIATURE_TARGET_POS } from './windowState.js';
 import { MosaicIndicator } from './quickSettings.js';
 
 // Module-level accessor for TilingManager (used by overviewLayout.js for on-demand cache)
@@ -100,20 +100,20 @@ export default class WindowMosaicExtension extends Extension {
 
     _tileWindowWorkspace(meta_window) {
         if(!meta_window) return;
-        let workspace = meta_window.get_workspace();
+        const workspace = meta_window.get_workspace();
         if(!workspace) return;
         this.tilingManager.tileWorkspaceWindows(workspace,
-                                      meta_window,
-                                      null,
-                                      false);
+            meta_window,
+            null,
+            false);
     }
 
     _tileAllWorkspaces = () => {
-        let nWorkspaces = this._workspaceManager.get_n_workspaces();
+        const nWorkspaces = this._workspaceManager.get_n_workspaces();
 
         for(let i = 0; i < nWorkspaces; i++) {
-            let workspace = this._workspaceManager.get_workspace_by_index(i);
-            let nMonitors = global.display.get_n_monitors();
+            const workspace = this._workspaceManager.get_workspace_by_index(i);
+            const nMonitors = global.display.get_n_monitors();
             for(let j = 0; j < nMonitors; j++)
                 this.tilingManager.tileWorkspaceWindows(workspace, false, j, true);
         }
@@ -157,14 +157,14 @@ export default class WindowMosaicExtension extends Extension {
 
     _workspaceAddSignal = (_, workspaceIdx) => {
         const workspace = this._workspaceManager.get_workspace_by_index(workspaceIdx);
-        let eventIds = [];
-        eventIds.push(workspace.connect("window-added", (ws, win) => this.windowHandler.onWindowAdded(ws, win)));
-        eventIds.push(workspace.connect("window-removed", (ws, win) => this.windowHandler.onWindowRemoved(ws, win)));
+        const eventIds = [];
+        eventIds.push(workspace.connect('window-added', (ws, win) => this.windowHandler.onWindowAdded(ws, win)));
+        eventIds.push(workspace.connect('window-removed', (ws, win) => this.windowHandler.onWindowRemoved(ws, win)));
         this._workspaceEventIds.push([workspace, eventIds]);
     };
 
     enable() {
-        Logger.info("Starting Mosaic layout manager.");
+        Logger.info('Starting Mosaic layout manager.');
 
         // Get workspace manager reference
         this._workspaceManager = global.workspace_manager;
@@ -177,7 +177,7 @@ export default class WindowMosaicExtension extends Extension {
                 this._mutterSettings.set_boolean('attach-modal-dialogs', true);
                 Logger.log('Failsafe: Restored attach-modal-dialogs setting');
             }
-        } catch (e) {
+        } catch (_e) {
             // Ignore - setting may not exist
         }
 
@@ -274,38 +274,61 @@ export default class WindowMosaicExtension extends Extension {
         // Override Overview layout to preserve mosaic positions
         this._injectionManager = new InjectionManager();
 
-        // Monkey-patch workspace switch animation to skip when miniatures are present.
-        // The default GNOME animation creates Clutter.Clone of the actor at its frame-rect
-        // position, ignoring our set_scale/set_translation transforms. This causes miniatures
-        // to appear at full size during the transition ("desminiaturizes on leave, reminiaturizes
-        // on return"). By skipping the animation, the transition is instant and correct.
-        const wsAnimProto = WorkspaceAnimation.WorkspaceAnimationController.prototype;
-        this._injectionManager.overrideMethod(wsAnimProto, 'animateSwitch', originalMethod => {
-            return function (_from, _to, _direction, onComplete) {
-                // Check if source or target workspace has miniatures
-                const wm = global.workspace_manager;
-                const fromWs = wm.get_workspace_by_index(_from);
-                const toWs = wm.get_workspace_by_index(_to);
-                let hasMiniatures = false;
-                for (const w of fromWs?.list_windows() ?? []) {
-                    if (WindowState.get(w, IS_MINIATURE)) { hasMiniatures = true; break; }
-                }
-                if (!hasMiniatures) {
-                    for (const w of toWs?.list_windows() ?? []) {
-                        if (WindowState.get(w, IS_MINIATURE)) { hasMiniatures = true; break; }
+        // Patch MonitorGroup._init to fix miniature clone positions and scale.
+        //
+        // GNOME Shell creates Clutter.Clone at (windowActor.x - monitor.x,
+        // windowActor.y - monitor.y) with scale=1. For miniature windows, the
+        // actor has set_scale + set_translation applied to visually shrink and
+        // reposition the frame content at MINIATURE_TARGET_POS. However,
+        // Clutter.Clone disables the source actor’s model-view transform during
+        // clone paint — so set_scale/set_translation on the source are ignored.
+        // The clone paints the source at full size with scale=1.
+        //
+        // We must apply the miniature scale directly on the clone (set_scale)
+        // and position it at the visual frame location (MINIATURE_TARGET_POS),
+        // accounting for CSD shadow extents that shift the frame within the actor.
+        //
+        // InjectionManager.overrideMethod does NOT work for GObject.registerClass
+        // methods (resolved via vtable, not JS prototype). Direct prototype
+        // replacement of _init DOES work — confirmed by the static-workspace-background
+        // extension pattern.
+        //
+        // TODO: Contribute upstream to gnome-shell/js/ui/workspaceAnimation.js —
+        // _createClone should propagate the source actor’s scale and position the
+        // clone at the visual frame location, not the raw actor position. This
+        // would allow extensions that use actor transforms (tiling WMs, magnifiers,
+        // etc.) to work correctly with the native workspace switch animation.
+        this._origMonitorGroupInit = WorkspaceAnimation.MonitorGroup.prototype._init;
+        const origInit = this._origMonitorGroupInit;
+        WorkspaceAnimation.MonitorGroup.prototype._init = function (monitor, workspaceIndices, movingWindow) {
+            origInit.call(this, monitor, workspaceIndices, movingWindow);
+
+            // After original _init, all WorkspaceGroups and their clones are created.
+            // Fix positions and scale of miniature clones.
+            //
+            // Clutter.Clone disables the source actor's model-view transform during
+            // clone paint, so set_scale/set_translation on the source are ignored.
+            // We must apply the miniature scale directly on the clone, and position
+            // it at the visual frame location (MINIATURE_TARGET_POS).
+            for (const wsGroup of this._workspaceGroups) {
+                if (!wsGroup._windowRecords) continue;
+                for (const record of wsGroup._windowRecords) {
+                    const metaWindow = record.windowActor.meta_window;
+                    if (WindowState.get(metaWindow, IS_MINIATURE)) {
+                        const tgt = WindowState.get(metaWindow, MINIATURE_TARGET_POS);
+                        const sc = WindowState.get(metaWindow, MINIATURE_SCALE);
+                        const extL = WindowState.get(metaWindow, MINIATURE_EXT_LEFT) ?? 0;
+                        const extT = WindowState.get(metaWindow, MINIATURE_EXT_TOP) ?? 0;
+                        if (tgt && sc) {
+                            record.clone.set_pivot_point(0, 0);
+                            record.clone.set_scale(sc, sc);
+                            record.clone.x = tgt.x - monitor.x - extL * sc;
+                            record.clone.y = tgt.y - monitor.y - extT * sc;
+                        }
                     }
                 }
-
-                if (hasMiniatures) {
-                    // Skip the GNOME animation — miniatures would appear wrong
-                    Logger.log(`[WORKSPACE SWITCH] Skipping animation (miniatures present)`);
-                    onComplete();
-                } else {
-                    // No miniatures — use the default GNOME animation
-                    originalMethod.call(this, _from, _to, _direction, onComplete);
-                }
-            };
-        });
+            }
+        };
 
         const layoutProto = Workspace.WorkspaceLayout.prototype;
         this._injectionManager.overrideMethod(layoutProto, '_createBestLayout', originalMethod => {
@@ -347,7 +370,7 @@ export default class WindowMosaicExtension extends Extension {
                 // Literal Fallback: use native GNOME strategy if not strictly mosaic
                 if (!useMosaic) {
                     if (isEnabled) {
-                         Logger.log(`Overview: Fallback to NATIVE (floating window detected)`);
+                        Logger.log('Overview: Fallback to NATIVE (floating window detected)');
                     }
                     this._layoutStrategy = null;
                     return originalMethod.apply(this, args);
@@ -365,27 +388,27 @@ export default class WindowMosaicExtension extends Extension {
         this._wmEventIds.push(global.window_manager.connect('size-changed', (wm, win) => this.resizeHandler.onSizeChanged(wm, win)));
         this._displayEventIds.push(global.display.connect('window-created', (_, window) => this.windowHandler.onWindowCreated(window)));
         this._wmEventIds.push(global.window_manager.connect('destroy', (wm, win) => this.windowHandler.onWindowDestroyed(win.meta_window)));
-        this._displayEventIds.push(global.display.connect("grab-op-begin", (display, window, grabpo) => this.dragHandler._grabOpBeginHandler(display, window, grabpo)));
-        this._displayEventIds.push(global.display.connect("grab-op-end", (display, window, grabpo) => this.dragHandler._grabOpEndHandler(display, window, grabpo)));
+        this._displayEventIds.push(global.display.connect('grab-op-begin', (display, window, grabpo) => this.dragHandler._grabOpBeginHandler(display, window, grabpo)));
+        this._displayEventIds.push(global.display.connect('grab-op-end', (display, window, grabpo) => this.dragHandler._grabOpEndHandler(display, window, grabpo)));
         this._onOverviewHiddenId = Main.overview.connect('hidden', () => this.windowHandler.onOverviewHidden());
 
-        this._workspaceManEventIds.push(global.workspace_manager.connect("active-workspace-changed", this._workspaceSwitchedHandler));
-        this._workspaceManEventIds.push(global.workspace_manager.connect("workspaces-reordered", this._workspacesReorderedHandler));
-        this._workspaceManEventIds.push(global.workspace_manager.connect("workspace-added", this._workspaceAddSignal));
+        this._workspaceManEventIds.push(global.workspace_manager.connect('active-workspace-changed', this._workspaceSwitchedHandler));
+        this._workspaceManEventIds.push(global.workspace_manager.connect('workspaces-reordered', this._workspacesReorderedHandler));
+        this._workspaceManEventIds.push(global.workspace_manager.connect('workspace-added', this._workspaceAddSignal));
 
-        let nWorkspaces = this._workspaceManager.get_n_workspaces();
+        const nWorkspaces = this._workspaceManager.get_n_workspaces();
         for(let i = 0; i < nWorkspaces; i++) {
-            let workspace = this._workspaceManager.get_workspace_by_index(i);
-            let eventIds = [];
-            eventIds.push(workspace.connect("window-added", (ws, win) => this.windowHandler.onWindowAdded(ws, win)));
-            eventIds.push(workspace.connect("window-removed", (ws, win) => this.windowHandler.onWindowRemoved(ws, win)));
+            const workspace = this._workspaceManager.get_workspace_by_index(i);
+            const eventIds = [];
+            eventIds.push(workspace.connect('window-added', (ws, win) => this.windowHandler.onWindowAdded(ws, win)));
+            eventIds.push(workspace.connect('window-removed', (ws, win) => this.windowHandler.onWindowRemoved(ws, win)));
             this._workspaceEventIds.push([workspace, eventIds]);
         }
 
         for(let i = 0; i < nWorkspaces; i++) {
-            let workspace = this._workspaceManager.get_workspace_by_index(i);
-            let windows = workspace.list_windows();
-            for (let window of windows) {
+            const workspace = this._workspaceManager.get_workspace_by_index(i);
+            const windows = workspace.list_windows();
+            for (const window of windows) {
                 // Initialize preferredSize if not set (for veteran windows)
                 if (this.windowingManager.isRelated(window)) {
                     this.tilingManager.savePreferredSize(window);
@@ -565,7 +588,7 @@ export default class WindowMosaicExtension extends Extension {
 
         Logger.log(`SWAP: Calling swapping.swapWindow for window ${focusedWindow.get_id()} direction: ${direction}`);
         this.swappingManager.swapWindow(focusedWindow, direction);
-        Logger.log(`SWAP: swapWindow call completed`);
+        Logger.log('SWAP: swapWindow call completed');
     }
 
     disable() {
@@ -580,7 +603,7 @@ export default class WindowMosaicExtension extends Extension {
             this._timeoutRegistry.remove(this._resizeDebounceTimeout);
             this._resizeDebounceTimeout = null;
         }
-        Logger.info("Disabling Mosaic layout manager.");
+        Logger.info('Disabling Mosaic layout manager.');
 
         if (this._settingsOverrider) {
             this._settingsOverrider.destroy();
@@ -590,6 +613,12 @@ export default class WindowMosaicExtension extends Extension {
         if (this._injectionManager) {
             this._injectionManager.clear();
             this._injectionManager = null;
+        }
+
+        // Restore MonitorGroup._init prototype patch
+        if (this._origMonitorGroupInit) {
+            WorkspaceAnimation.MonitorGroup.prototype._init = this._origMonitorGroupInit;
+            this._origMonitorGroupInit = null;
         }
 
         // Restore original map animation and cleanup queue
@@ -643,13 +672,13 @@ export default class WindowMosaicExtension extends Extension {
             this._timeoutRegistry.remove(this._tileTimeout);
             this._tileTimeout = null;
         }
-        for(let eventId of this._wmEventIds)
+        for(const eventId of this._wmEventIds)
             global.window_manager.disconnect(eventId);
-        for(let eventId of this._displayEventIds)
+        for(const eventId of this._displayEventIds)
             global.display.disconnect(eventId);
-        for(let eventId of this._workspaceManEventIds)
+        for(const eventId of this._workspaceManEventIds)
             global.workspace_manager.disconnect(eventId);
-        for(let container of this._workspaceEventIds) {
+        for(const container of this._workspaceEventIds) {
             const workspace = container[0];
             const eventIds = container[1];
             eventIds.forEach((eventId) => workspace.disconnect(eventId));

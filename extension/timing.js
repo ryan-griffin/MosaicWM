@@ -236,7 +236,7 @@ export function afterOverviewHidden(callback, registry) {
     registry.add(1000, () => {
         if (Main.overview.visible) {
             Logger.log('Overview hide timeout - forcing callback');
-            try { Main.overview.disconnect(hiddenId); } catch(e) {}
+            try { Main.overview.disconnect(hiddenId); } catch(_e) {}
             callback();
         }
         return GLib.SOURCE_REMOVE;
