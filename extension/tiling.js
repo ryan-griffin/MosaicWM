@@ -18,7 +18,7 @@ import {
     MINIATURE_OVERLAY,
     ANIMATING_MINIATURE,
 } from './windowState.js';
-import { getMiniatureSize, applyMiniatureActorState } from './miniature.js';
+import { getMiniatureSize, applyMiniatureActorState, animateMiniatureToTarget } from './miniature.js';
 
 export const ComputedLayouts = new WeakMap();
 
@@ -344,6 +344,19 @@ export const TilingManager = GObject.registerClass({
             } else {
                 const window = meta_windows.find(w => w.get_id() === pos.id);
                 if (!window) continue;
+
+                if (WindowState.get(window, IS_MINIATURE)) {
+                    const actor = window.get_compositor_private();
+                    if (actor) {
+                        const sc = WindowState.get(window, MINIATURE_SCALE) ?? 1;
+                        const extL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
+                        const extT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
+                        animateMiniatureToTarget(actor, window, sc, extL, extT, pos.x, pos.y,
+                            constants.ANIMATION_DURATION_MS);
+                        WindowState.get(window, MINIATURE_OVERLAY)?.animateToPosition(constants.ANIMATION_DURATION_MS);
+                    }
+                    continue;
+                }
 
                 const currentRect = window.get_frame_rect();
                 const posChanged = Math.abs(currentRect.x - pos.x) > 5 || Math.abs(currentRect.y - pos.y) > 5;
@@ -689,16 +702,17 @@ export const TilingManager = GObject.registerClass({
         
         for (const w of windows) {
             let placed = false;
-            const wIsMini = w.metaWindow && WindowState.get(w.metaWindow, IS_MINIATURE);
+            const wIsMini = w.isMiniature ||
+                (w.metaWindow && WindowState.get(w.metaWindow, IS_MINIATURE));
 
             // Try to fit in existing column. Miniatures and regular windows
             // never share a column — keeps spacing uniform (mini's column width
             // matches the mini's width, so adjacent gaps stay at WINDOW_SPACING).
             for (const col of columns) {
                 const colHasMini = col.windows.some(cw =>
-                    cw.metaWindow && WindowState.get(cw.metaWindow, IS_MINIATURE));
+                    cw.isMiniature || (cw.metaWindow && WindowState.get(cw.metaWindow, IS_MINIATURE)));
                 const colHasRegular = col.windows.some(cw =>
-                    !cw.metaWindow || !WindowState.get(cw.metaWindow, IS_MINIATURE));
+                    !(cw.isMiniature || (cw.metaWindow && WindowState.get(cw.metaWindow, IS_MINIATURE))));
                 if (wIsMini && colHasRegular) continue;
                 if (!wIsMini && colHasMini) continue;
 
@@ -1248,13 +1262,9 @@ export const TilingManager = GObject.registerClass({
                                 const extL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
                                 const extT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
                                 if (actor) {
-                                    if (WindowState.get(window, ANIMATING_MINIATURE)) {
-                                        WindowState.set(window, MINIATURE_TARGET_POS, { x: tx, y: ty });
-                                    } else {
-                                        applyMiniatureActorState(actor, sc, extL, extT, tx, ty);
-                                        WindowState.set(window, MINIATURE_TARGET_POS, { x: tx, y: ty });
-                                    }
-                                    WindowState.get(window, MINIATURE_OVERLAY)?.updatePosition();
+                                    animateMiniatureToTarget(actor, window, sc, extL, extT, tx, ty,
+                                        constants.ANIMATION_DURATION_MS);
+                                    WindowState.get(window, MINIATURE_OVERLAY)?.animateToPosition(constants.ANIMATION_DURATION_MS);
                                 }
                                 Logger.log(`[MINIATURE] animateTile H ${window.get_id()}: target=(${tx},${ty}) scale=${sc.toFixed(4)} extLeft=${extL} extTop=${extT} size=${windowDesc.width}x${windowDesc.height}`);
                             } else if (windowDesc.id === resizingWindowId) {
@@ -1295,13 +1305,9 @@ export const TilingManager = GObject.registerClass({
                                 const extL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
                                 const extT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
                                 if (actor) {
-                                    if (WindowState.get(window, ANIMATING_MINIATURE)) {
-                                        WindowState.set(window, MINIATURE_TARGET_POS, { x: targetX, y: targetY });
-                                    } else {
-                                        applyMiniatureActorState(actor, sc, extL, extT, targetX, targetY);
-                                        WindowState.set(window, MINIATURE_TARGET_POS, { x: targetX, y: targetY });
-                                    }
-                                    WindowState.get(window, MINIATURE_OVERLAY)?.updatePosition();
+                                    animateMiniatureToTarget(actor, window, sc, extL, extT, targetX, targetY,
+                                        constants.ANIMATION_DURATION_MS);
+                                    WindowState.get(window, MINIATURE_OVERLAY)?.animateToPosition(constants.ANIMATION_DURATION_MS);
                                 }
                                 Logger.log(`[MINIATURE] animateTile V ${window.get_id()}: target=(${targetX},${targetY}) scale=${sc.toFixed(4)} extLeft=${extL} extTop=${extT} size=${windowDesc.width}x${windowDesc.height}`);
                             } else if (windowDesc.id === resizingWindowId) {
@@ -2420,6 +2426,7 @@ class WindowDescriptor {
 
         // Miniature size takes first priority
         const miniSize = getMiniatureSize(meta_window);
+        this.isMiniature = !!miniSize;
         if (miniSize) {
             this.width  = miniSize.width;
             this.height = miniSize.height;
