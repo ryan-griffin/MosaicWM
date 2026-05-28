@@ -2260,6 +2260,12 @@ export const TilingManager = GObject.registerClass({
             for (const w of [...windows, newWindow]) {
                 if (allWindows.some(aw => aw.get_id() === w.get_id())) continue;
 
+                // Skip destroyed windows — get_frame_rect on a disposed MetaWindow segfaults libmutter.
+                if (!w || !w.get_compositor_private()) {
+                    Logger.log(`[SMART RESIZE] Skipping destroyed window ${w?.get_id?.() ?? '?'}`);
+                    continue;
+                }
+
                 // Skip uninitialized windows — unreliable geometry corrupts binary search
                 if (w.get_id() !== newWindow.get_id()
                     && !WindowState.get(w, 'preferredSize')

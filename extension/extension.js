@@ -529,6 +529,7 @@ export default class WindowMosaicExtension extends Extension {
 
         const existingWindows = this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor)
             .filter(w =>
+                w.get_compositor_private() &&
                 w.get_id() !== window.get_id() &&
                 !this.edgeTilingManager.isEdgeTiled(w) &&
                 !WindowState.get(w, 'pendingInQueue') &&
