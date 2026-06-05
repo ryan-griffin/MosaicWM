@@ -93,6 +93,21 @@ export default class WindowMosaicExtension extends Extension {
         return !this._disabledWorkspaceStates.get(workspace);
     }
 
+    disableWorkspaceMosaic(workspace) {
+        if (!workspace) return;
+
+        if (this.miniatureManager)
+            this.miniatureManager.restoreWorkspaceMiniatures(workspace);
+
+        if (this.drawingManager) {
+            this.drawingManager.removeBoxes();
+            this.drawingManager.hideTilePreview();
+        }
+
+        if (this.edgeTilingManager)
+            this.edgeTilingManager.clearAllStates();
+    }
+
     _updateIndicatorIcon() {
         if (this._mosaicIndicator) {
             this._mosaicIndicator._updateIcon();

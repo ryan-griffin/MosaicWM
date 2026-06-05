@@ -91,6 +91,7 @@ const MosaicMenuToggle = GObject.registerClass(
                     const workspace = this._workspaceManager.get_workspace_by_index(i);
                     if (workspace) {
                         this._extension._disabledWorkspaceStates.set(workspace, true);
+                        this._extension.disableWorkspaceMosaic(workspace);
                     }
                 }
             }
@@ -159,7 +160,7 @@ const MosaicMenuToggle = GObject.registerClass(
     
         _onWorkspaceToggle(workspaceIndex, enabled) {
             Logger.log(`Quick Settings: Workspace ${workspaceIndex + 1} mosaic ${enabled ? 'ON' : 'OFF'}`);
-        
+
             const workspace = this._workspaceManager.get_workspace_by_index(workspaceIndex);
             if (workspace) {
                 if (enabled) {
@@ -168,18 +169,18 @@ const MosaicMenuToggle = GObject.registerClass(
                     this._extension._disabledWorkspaceStates.set(workspace, true);
                 }
             }
-        
+
             this._updateGlobalToggleState();
             this._extension._updateIndicatorIcon();
-        
-            // Re-tile the affected workspace if enabling
-            if (enabled) {
-                const workspace = this._workspaceManager.get_workspace_by_index(workspaceIndex);
-                if (workspace) {
+
+            if (workspace) {
+                if (enabled) {
                     Logger.log(`Quick Settings: Re-tiling workspace ${workspaceIndex + 1}`);
                     const nMonitors = global.display.get_n_monitors();
                     for (let j = 0; j < nMonitors; j++)
                         this._extension.tilingManager.enforceWorkspaceFit(workspace, j);
+                } else {
+                    this._extension.disableWorkspaceMosaic(workspace);
                 }
             }
         }

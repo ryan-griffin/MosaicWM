@@ -351,7 +351,7 @@ export const MiniatureManager = GObject.registerClass({
         return true;
     }
 
-    restoreMiniature(window, _newSlot) {
+    restoreMiniature(window, _newSlot, { activate = true } = {}) {
         const windowActor = window.get_compositor_private();
 
         const frame = window.get_frame_rect();
@@ -399,7 +399,7 @@ export const MiniatureManager = GObject.registerClass({
                     windowActor.set_pivot_point(0, 0);
                     windowActor.set_scale(1.0, 1.0);
                     windowActor.set_translation(0, 0, 0);
-                    window.activate(global.get_current_time());
+                    if (activate) window.activate(global.get_current_time());
                     const [finalAx, finalAy] = windowActor.get_position();
                     const [finalW, finalH] = windowActor.get_size();
                     Logger.log(`[MINIATURE] restoreMiniature animation complete ${window.get_id()}: FINAL actor=(${finalAx},${finalAy} ${finalW}x${finalH})`);
@@ -468,6 +468,14 @@ export const MiniatureManager = GObject.registerClass({
             .filter(w => WindowState.get(w, IS_MINIATURE));
         for (const window of windows) {
             this.restoreMiniature(window, null);
+        }
+    }
+
+    restoreWorkspaceMiniatures(workspace) {
+        const windows = global.display.get_tab_list(Meta.TabList.NORMAL, workspace)
+            .filter(w => WindowState.get(w, IS_MINIATURE));
+        for (const window of windows) {
+            this.restoreMiniature(window, null, { activate: false });
         }
     }
 

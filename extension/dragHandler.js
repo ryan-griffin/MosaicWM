@@ -82,6 +82,9 @@ export const DragHandler = GObject.registerClass({
         }
         
         if (isMoveGrabOp(grabpo) && !this.windowingManager.isExcluded(window)) {
+            const workspace = window.get_workspace();
+            if (workspace && this._ext && !this._ext.isMosaicEnabledForWorkspace(workspace))
+                return;
             Logger.log('Edge tiling: grab begin');
             this._draggedWindow = window;
             
