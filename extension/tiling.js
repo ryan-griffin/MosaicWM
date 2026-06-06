@@ -1778,8 +1778,9 @@ export const TilingManager = GObject.registerClass({
                     if (WindowState.get(w, IS_MINIATURE)) {
                         const ms = getMiniatureSize(w);
                         const f = w.get_frame_rect();
-                        return ms ? { id: w.get_id(), width: ms.width, height: ms.height }
-                                  : { id: w.get_id(), width: f.width, height: f.height };
+                        return ms
+                            ? { id: w.get_id(), width: ms.width, height: ms.height }
+                            : { id: w.get_id(), width: f.width, height: f.height };
                     }
                     const f = w.get_frame_rect();
                     return { id: w.get_id(), width: f.width, height: f.height };
