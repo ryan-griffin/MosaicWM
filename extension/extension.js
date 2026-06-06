@@ -106,6 +106,13 @@ export default class WindowMosaicExtension extends Extension {
 
         if (this.edgeTilingManager)
             this.edgeTilingManager.clearAllStates();
+
+        // Wait for miniature restore animations (250 ms) before cascading.
+        this._timeoutRegistry?.add(300, () => {
+            if (!this.isMosaicEnabledForWorkspace(workspace))
+                this.tilingManager?.cascadeWorkspaceWindows(workspace);
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _updateIndicatorIcon() {
@@ -540,6 +547,7 @@ export default class WindowMosaicExtension extends Extension {
 
         const workspace = window.get_workspace();
         if (!workspace) return;
+        if (!this.isMosaicEnabledForWorkspace(workspace)) return;
         const monitor = window.get_monitor();
         const workArea = workspace.get_work_area_for_monitor(monitor);
 

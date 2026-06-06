@@ -1399,6 +1399,59 @@ export const TilingManager = GObject.registerClass({
         return true;
     }
 
+    // Arrange windows in a cascade (largest → smallest, left → right) with smooth
+    // animation. Called after workspace mosaic is disabled so windows get a tidy
+    // resting state instead of staying in their last tiled positions.
+    cascadeWorkspaceWindows(workspace) {
+        if (!workspace || workspace.index() < 0) return;
+
+        const monitor = global.display.get_current_monitor();
+        const workArea = workspace.get_work_area_for_monitor(monitor);
+        if (!workArea || workArea.width <= 0) return;
+
+        const windows = this._windowingManager
+            ?.getMonitorWorkspaceWindows(workspace, monitor)
+            .filter(w => !this._windowingManager.isMaximizedOrFullscreen(w)) ?? [];
+
+        if (windows.length === 0) return;
+
+        windows.sort((a, b) => {
+            const fa = a.get_frame_rect(), fb = b.get_frame_rect();
+            return (fb.width * fb.height) - (fa.width * fa.height);
+        });
+
+        const OFFSET = 56;
+
+        // Compute positions relative to (0,0), then center the group in the work area.
+        const frames = windows.map(w => w.get_frame_rect());
+        const relPositions = frames.map((f, i) => ({ x: i * OFFSET, y: i * OFFSET, w: f.width, h: f.height }));
+
+        const groupW = Math.max(...relPositions.map(p => p.x + p.w));
+        const groupH = Math.max(...relPositions.map(p => p.y + p.h));
+
+        const originX = workArea.x + Math.max(0, Math.round((workArea.width  - groupW) / 2));
+        const originY = workArea.y + Math.max(0, Math.round((workArea.height - groupH) / 2));
+
+        Logger.log(`[CASCADE] workArea=(${workArea.x},${workArea.y} ${workArea.width}x${workArea.height}) group=(${groupW}x${groupH}) origin=(${originX},${originY}) windows=${windows.length}`);
+
+        const layouts = windows.map((w, i) => {
+            const p = relPositions[i];
+            const x = Math.min(originX + p.x, workArea.x + workArea.width  - p.w);
+            const y = Math.min(originY + p.y, workArea.y + workArea.height - p.h);
+            Logger.log(`[CASCADE] w=${w.get_id()} frame=(${frames[i].x},${frames[i].y} ${p.w}x${p.h}) -> (${x},${y})`);
+            return { window: w, rect: { x, y, width: p.w, height: p.h } };
+        });
+
+        // Raise from largest (back) to smallest (front) to establish visual stacking order.
+        for (const w of windows) {
+            w.raise();
+        }
+        // Focus the smallest window so it appears on top and is ready to interact with.
+        windows[windows.length - 1].activate(global.get_current_time());
+
+        this._animationsManager?.animateReTiling(layouts);
+    }
+
     // Re-apply mosaic from scratch with smart-resize + miniaturization. Used by
     // extension enable and Quick Settings toggle-on — tileWorkspaceWindows's
     // overflow path needs a "newly added" reference window, so can't handle this.
