@@ -1695,9 +1695,7 @@ export const TilingManager = GObject.registerClass({
                 // If it's a sacred return, we MUST try to fit it, even if it means squishing everyone.
                 if (WindowState.get(reference_meta_window, 'isRestoringSacred')) {
                     const workArea = this.getUsableWorkArea(workspace, monitor);
-                    const _existingWindows = windows.filter(w => w.id !== reference_meta_window.get_id()).map(w => w.window); // Need MetaWindows
-                    // We need actual MetaWindows for tryFit, but 'windows' here are descriptors.
-                    // Re-fetch real windows.
+                    // windows here are descriptors; re-fetch MetaWindows for tryFitWithResize
                     const realExisting = this._windowingManager.getMonitorWorkspaceWindows(workspace, monitor)
                         .filter(w => w.get_id() !== reference_meta_window.get_id() && !this._windowingManager.isExcluded(w));
                                           
@@ -2196,9 +2194,6 @@ export const TilingManager = GObject.registerClass({
         }
         
         Logger.log(`tryRestoreWindowSizes: Found ${shrunkWindows.length} shrunk windows`);
-        
-        // Determine orientation (use width for landscape, height for portrait)
-        const _isLandscape = workArea.width > workArea.height;
         
         // Check if we have valid freed dimensions, otherwise calculate them
         if (freedWidth === null || freedWidth === undefined || isNaN(freedWidth)) {
@@ -2779,11 +2774,6 @@ export const TilingManager = GObject.registerClass({
         this._windowingManager = null;
     }
 });
-
-function _transitionFromMiniature(window, _slot, ext) {
-    if (!ext?.miniatureManager) return false;
-    return ext.miniatureManager.restoreMiniature(window, null);
-}
 
 class WindowDescriptor {
     constructor(meta_window, index) {
