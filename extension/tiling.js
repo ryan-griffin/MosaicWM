@@ -1647,25 +1647,6 @@ export const TilingManager = GObject.registerClass({
             }
         }
         
-        // GLOBAL: Filter out maximized/fullscreen windows (SACRED - never touch them)
-        const isSacredWindow = (w) => {
-            // Check flags only (Maximized or Fullscreen)
-            return this._windowingManager.isMaximizedOrFullscreen(w);
-        };
-        
-        const sacredWindows = meta_windows.filter(isSacredWindow);
-        if (sacredWindows.length > 0) {
-            Logger.log(`Excluding ${sacredWindows.length} SACRED windows: ${sacredWindows.map(w => w.get_id()).join(', ')}`);
-            meta_windows = meta_windows.filter(w => !isSacredWindow(w));
-            windows = windows.filter((_, idx) => !isSacredWindow(working_info.meta_windows[idx]));
-        }
-        
-        // If no windows left to tile, return early
-        if (meta_windows.length === 0) {
-            Logger.log(`No windows left to tile after filtering sacred windows. Original count: ${working_info.meta_windows.length}`);
-            return { overflow: false, layout: null };
-        }
-        
         // Only reset if not already populated (to survive recursive calls from tryFitWithResize)
         if (!this._pendingMiniatureWindows) {
             this._pendingMiniatureWindows = [];
