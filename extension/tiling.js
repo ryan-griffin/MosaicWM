@@ -68,6 +68,7 @@ export const TilingManager = GObject.registerClass({
         // Layout cache to avoid redundant O(n!) permutation calculations
         this._lastLayoutHash = null;
         this._cachedTileResult = null;
+        this._lastTiledOrder = null;
 
         // Swap/reorder operations per workspace — keyed by Meta.Workspace via WeakMap
         // to avoid monkey-patching native GObjects (the same reason windowState.js exists).
@@ -2802,6 +2803,7 @@ export const TilingManager = GObject.registerClass({
         this.destroyMasks();
         this._isSmartResizingBlocked = false;
         this._restoringWindowId = null;
+        this._lastTiledOrder = null;
         this._workspaceSwaps = null;
         this._edgeTilingManager = null;
         this._drawingManager = null;
