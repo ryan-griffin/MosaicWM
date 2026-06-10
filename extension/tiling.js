@@ -22,6 +22,8 @@ import {
 import { getMiniatureSize, applyMiniatureActorState, animateMiniatureToTarget } from './miniature.js';
 import { isWindowAlive } from './liveness.js';
 
+const POSITION_STABILITY_WEIGHT = 40;
+
 // Keyed by window ID internally to survive GI reference churn; API mirrors WeakMap
 const _computedLayouts = new Map();
 export const ComputedLayouts = {
@@ -1647,7 +1649,13 @@ export const TilingManager = GObject.registerClass({
         const computedSlots = new Map();
 
         const tileArea = this.isDragging && this.dragRemainingSpace ? this.dragRemainingSpace : work_area;
-        
+
+        this._positionSnapshot = new Map();
+        for (const w of meta_windows) {
+            const f = w.get_frame_rect();
+            this._positionSnapshot.set(w.get_id(), { cx: f.x + f.width / 2, cy: f.y + f.height / 2 });
+        }
+
         let tile_info = this._tile(windows, tileArea, dryRun);
         let overflow = tile_info.overflow;
         
@@ -1661,6 +1669,7 @@ export const TilingManager = GObject.registerClass({
         
         // DRY RUN: If dryRun flag is set, return overflow without moving anything
         if (dryRun) {
+            this._positionSnapshot = null;
             return { overflow, layout: this._cachedTileResult?.windows || null };
         }
 
@@ -1779,6 +1788,7 @@ export const TilingManager = GObject.registerClass({
                 Logger.log('[OVERFLOW] No-ref overflow: no single miniaturization resolves it — clamped positions applied');
         }
 
+        this._positionSnapshot = null;
         Logger.log(`Drawing tiles - isDragging: ${this.isDragging}, using tileArea: x=${tileArea.x}, y=${tileArea.y}`);
         
         // ANIMATIONS
