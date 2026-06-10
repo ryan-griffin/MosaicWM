@@ -251,7 +251,7 @@ export const MiniatureManager = GObject.registerClass({
         this._miniatureWindows = new Set();
     }
 
-    createMiniature(window, computedSlot, forcedPreSize = null) {
+    createMiniature(window, computedSlot, forcedPreSize = null, { animate = true } = {}) {
         const windowActor = window.get_compositor_private();
         if (!windowActor) return false;
 
@@ -285,44 +285,50 @@ export const MiniatureManager = GObject.registerClass({
         const enforceEffect = new MiniatureEnforceEffect(window);
         windowActor.add_effect(enforceEffect);
 
-        // Mark as animating so enforce effect doesn't interfere
-        WindowState.set(window, ANIMATING_MINIATURE, true);
-        WindowState.set(window, MINIATURE_ANIM_KIND, 'create');
+        if (animate) {
+            // Mark as animating so enforce effect doesn't interfere
+            WindowState.set(window, ANIMATING_MINIATURE, true);
+            WindowState.set(window, MINIATURE_ANIM_KIND, 'create');
 
-        // Zoom-out animation: scale from 1.0 to miniatureScale, centered.
-        // With pivot at center, scaling keeps the actor's center fixed, so translation
-        // must offset by actorW*(1-scale)/2 to land the frame top-left at target.
-        windowActor.set_pivot_point(0.5, 0.5);
-        const [ax, ay] = windowActor.get_position();
-        const [actorW, actorH] = windowActor.get_size();
-        const tx = targetX - ax - actorW * (1 - scale) / 2 - extLeft * scale;
-        const ty = targetY - ay - actorH * (1 - scale) / 2 - extTop * scale;
+            // Zoom-out animation: scale from 1.0 to miniatureScale, centered.
+            // With pivot at center, scaling keeps the actor's center fixed, so translation
+            // must offset by actorW*(1-scale)/2 to land the frame top-left at target.
+            windowActor.set_pivot_point(0.5, 0.5);
+            const [ax, ay] = windowActor.get_position();
+            const [actorW, actorH] = windowActor.get_size();
+            const tx = targetX - ax - actorW * (1 - scale) / 2 - extLeft * scale;
+            const ty = targetY - ay - actorH * (1 - scale) / 2 - extTop * scale;
 
-        windowActor.ease({
-            scale_x: scale,
-            scale_y: scale,
-            translation_x: tx,
-            translation_y: ty,
-            duration: 250,
-            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            onStopped: () => {
-                WindowState.remove(window, ANIMATING_MINIATURE);
-                WindowState.remove(window, MINIATURE_ANIM_KIND);
-                // Reset pivot for enforce effect (uses pivot 0,0)
-                windowActor.set_pivot_point(0, 0);
-                // Re-apply with the LATEST target (layout may have recomputed)
-                const finalTgt = WindowState.get(window, MINIATURE_TARGET_POS);
-                const finalSc = WindowState.get(window, MINIATURE_SCALE);
-                const finalExtL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
-                const finalExtT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
-                if (finalTgt && finalSc) {
-                    applyMiniatureActorState(windowActor, finalSc, finalExtL, finalExtT, finalTgt.x, finalTgt.y);
-                }
-                const [finalAx, finalAy] = windowActor.get_position();
-                const [finalW, finalH] = windowActor.get_size();
-                Logger.log(`[MINIATURE] createMiniature animation complete ${window.get_id()}: FINAL actor=(${finalAx},${finalAy} ${finalW}x${finalH}) scale=${finalSc} FINAL_VISUAL=${Math.round(finalW * finalSc)}x${Math.round(finalH * finalSc)}`);
-            },
-        });
+            windowActor.ease({
+                scale_x: scale,
+                scale_y: scale,
+                translation_x: tx,
+                translation_y: ty,
+                duration: 250,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                onStopped: () => {
+                    WindowState.remove(window, ANIMATING_MINIATURE);
+                    WindowState.remove(window, MINIATURE_ANIM_KIND);
+                    // Reset pivot for enforce effect (uses pivot 0,0)
+                    windowActor.set_pivot_point(0, 0);
+                    // Re-apply with the LATEST target (layout may have recomputed)
+                    const finalTgt = WindowState.get(window, MINIATURE_TARGET_POS);
+                    const finalSc = WindowState.get(window, MINIATURE_SCALE);
+                    const finalExtL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
+                    const finalExtT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
+                    if (finalTgt && finalSc) {
+                        applyMiniatureActorState(windowActor, finalSc, finalExtL, finalExtT, finalTgt.x, finalTgt.y);
+                    }
+                    const [finalAx, finalAy] = windowActor.get_position();
+                    const [finalW, finalH] = windowActor.get_size();
+                    Logger.log(`[MINIATURE] createMiniature animation complete ${window.get_id()}: FINAL actor=(${finalAx},${finalAy} ${finalW}x${finalH}) scale=${finalSc} FINAL_VISUAL=${Math.round(finalW * finalSc)}x${Math.round(finalH * finalSc)}`);
+                },
+            });
+        } else {
+            // Instant: apply transforms synchronously so the overview's frozen
+            // slot (already set to mini) matches the actor state from the first frame.
+            applyMiniatureActorState(windowActor, scale, extLeft, extTop, targetX, targetY);
+        }
 
         Logger.log(`[MINIATURE] createMiniature ${window.get_id()}: miniSize=${Math.round(preSize.width * scale)}x${Math.round(preSize.height * scale)}`);
 
@@ -381,8 +387,8 @@ export const MiniatureManager = GObject.registerClass({
             const tx = frame.x - ax - extL;
             const ty = frame.y - ay - extT;
 
-            // Zoom-in animation: scale from miniatureScale to 1.0, centered
-            windowActor.set_pivot_point(0.5, 0.5);
+            // Enforce effect's translation assumes pivot-at-origin; changing it mid-animation causes a visual jump.
+            windowActor.set_pivot_point(0, 0);
             windowActor.ease({
                 scale_x: 1.0,
                 scale_y: 1.0,
