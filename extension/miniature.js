@@ -302,9 +302,9 @@ export const MiniatureManager = GObject.registerClass({
                 const endTy = targetY - actorBefore_y - extTop * scale;
                 const animDuration = Math.max(1, Math.round(250 * (cs - scale) / Math.max(0.001, 1.0 - scale)));
 
-                windowActor.remove_all_transitions();
-                // restore's onStopped fired: IS_MINIATURE=true → no snap; MINIATURE_ANIM_KIND removed.
                 WindowState.set(window, MINIATURE_ANIM_KIND, 'create');
+                windowActor.remove_all_transitions();
+                // restore's onStopped: IS_MINIATURE=true → no snap; kind already 'create' → removal skipped.
 
                 windowActor.set_pivot_point(0, 0);
                 windowActor.set_scale(cs, cs);
@@ -487,7 +487,8 @@ export const MiniatureManager = GObject.registerClass({
                 duration,
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
                 onStopped: () => {
-                    WindowState.remove(window, MINIATURE_ANIM_KIND);
+                    if (WindowState.get(window, MINIATURE_ANIM_KIND) === 'restore')
+                        WindowState.remove(window, MINIATURE_ANIM_KIND);
                     if (!WindowState.get(window, IS_MINIATURE)) {
                         windowActor.set_pivot_point(0, 0);
                         windowActor.set_scale(1.0, 1.0);
