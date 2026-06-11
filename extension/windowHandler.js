@@ -1181,7 +1181,7 @@ export const WindowHandler = GObject.registerClass({
                     const workArea = this._ext.tilingManager.getUsableWorkArea(WORKSPACE, MONITOR);
                     if (this._ext.tilingManager.canRestoreMiniature(candidate, remainingWindows, workArea)) {
                         this._ext._miniatureCascadeIds?.delete(candidate.get_id());
-                        this._ext.miniatureManager.restoreMiniature(candidate, null);
+                        this._ext.miniatureManager.restoreMiniature(candidate, null, { activate: false });
                         this._ext._onMiniatureRestored(candidate);
                         return GLib.SOURCE_REMOVE;
                     }

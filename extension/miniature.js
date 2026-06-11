@@ -564,7 +564,7 @@ export const MiniatureManager = GObject.registerClass({
         const windows = global.display.get_tab_list(Meta.TabList.NORMAL, null)
             .filter(w => WindowState.get(w, IS_MINIATURE));
         for (const window of windows) {
-            this.restoreMiniature(window, null);
+            this.restoreMiniature(window, null, { activate: false });
         }
     }
 
