@@ -161,12 +161,19 @@ export const WindowHandler = GObject.registerClass({
     _applySlideInAnimation(actor, offsetX, offsetY, animationMode) {
         const win = actor.meta_window;
         const origEase = actor.ease;
-        
+        let restored = false;
+
+        const restoreEase = () => {
+            if (restored) return;
+            restored = true;
+            actor.ease = origEase;
+        };
+
         actor.ease = function(props) {
             const callStack = (new Error()).stack;
             if (callStack.includes('_mapWindow@')) {
                 // Restore ease immediately
-                actor.ease = origEase;
+                restoreEase();
 
                 // Revert GNOME's initial scaling setup (from _mapWindow)
                 actor.set_scale(1.0, 1.0);
@@ -174,7 +181,7 @@ export const WindowHandler = GObject.registerClass({
 
                 // Apply our slide offset
                 actor.set_translation(offsetX, offsetY, 0);
-                
+
                 // Force opacity to 0
                 actor.opacity = 0;
 
@@ -185,7 +192,7 @@ export const WindowHandler = GObject.registerClass({
                     translation_x: 0,
                     translation_y: 0,
                     opacity: 255,
-                    duration: 300,
+                    duration: constants.SLIDE_IN_DURATION_MS,
                     mode: animationMode,
                     onStopped: () => {
                         actor.opacity = 255;
@@ -197,6 +204,14 @@ export const WindowHandler = GObject.registerClass({
                 origEase.apply(this, arguments);
             }
         };
+
+        // Failsafe: if _mapWindow never animates this actor (animation cancelled,
+        // different code path), don't leave actor.ease patched forever.
+        this._timeoutRegistry.add(constants.SLIDE_IN_FAILSAFE_MS, () => {
+            restoreEase();
+            WindowState.remove(win, 'slideInAnimating');
+            return GLib.SOURCE_REMOVE;
+        }, 'windowHandler_easeRestoreFailsafe');
     }
 
     // Lock a workspace to prevent recursive or conflicting tiling triggers.
@@ -472,7 +487,7 @@ export const WindowHandler = GObject.registerClass({
             const freedWidth = frame.width;
             const freedHeight = frame.height;
 
-            this._timeoutRegistry.add(100, () => {
+            this._timeoutRegistry.add(constants.RETILE_DELAY_MS, () => {
                 const remainingWindows = this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor)
                     .filter(w => w.get_id() !== windowId && !this.windowingManager.isExcluded(w));
 
@@ -490,7 +505,7 @@ export const WindowHandler = GObject.registerClass({
             // Window became included - treat like new window arrival with smart resize
             Logger.log(`Window ${windowId} became included - treating as new window arrival`);
 
-            this._timeoutRegistry.add(100, () => {
+            this._timeoutRegistry.add(constants.RETILE_DELAY_MS, () => {
                 const workArea = this.edgeTilingManager.calculateRemainingSpace(workspace, monitor);
                 if (!workArea) {
                     Logger.log('WindowHandler: Skipped include - invalid workArea');
@@ -560,10 +575,12 @@ export const WindowHandler = GObject.registerClass({
         if (windowWorkspace) {
             const workspace = windowWorkspace;
 
-            // Capture destroyed window size for reverse smart resize
-            const destroyedFrame = window.get_frame_rect();
-            const freedWidth = destroyedFrame.width;
-            const freedHeight = destroyedFrame.height;
+            // Capture destroyed window size for reverse smart resize.
+            // The actor may already be disposed during signal delivery —
+            // get_frame_rect on a dead MetaWindow segfaults libmutter.
+            const destroyedFrame = isWindowAlive(window) ? window.get_frame_rect() : null;
+            const freedWidth = destroyedFrame ? destroyedFrame.width : 0;
+            const freedHeight = destroyedFrame ? destroyedFrame.height : 0;
 
             this.edgeTilingManager.checkQuarterExpansion(workspace, monitor);
 
@@ -995,8 +1012,13 @@ export const WindowHandler = GObject.registerClass({
                 if (timeoutId) this._timeoutRegistry.remove(timeoutId);
 
                 if (processWindowCallback() === GLib.SOURCE_CONTINUE) {
-                    // One small safety polling if initial callback failed (rare)
-                    this._timeoutRegistry.add(constants.WINDOW_VALIDITY_CHECK_INTERVAL_MS, processWindowCallback, 'windowHandler_safetyPoll');
+                    // Bounded safety polling if initial callback failed (rare)
+                    let attempts = 0;
+                    this._timeoutRegistry.add(constants.WINDOW_VALIDITY_CHECK_INTERVAL_MS, () => {
+                        if (++attempts > constants.GEOMETRY_WAIT_MAX_ATTEMPTS || !isWindowAlive(window))
+                            return GLib.SOURCE_REMOVE;
+                        return processWindowCallback();
+                    }, 'windowHandler_safetyPoll');
                 }
 
                 // Now that window is processed, connect standard signals
@@ -1026,11 +1048,13 @@ export const WindowHandler = GObject.registerClass({
                 return GLib.SOURCE_REMOVE;
             }, 'windowHandler_mapSafety');
         } else {
-            // Fallback for non-actor windows (rare in Shell)
+            // Fallback for non-actor windows (rare in Shell) — bounded polling
+            let fallbackAttempts = 0;
             this._timeoutRegistry.add(constants.WINDOW_VALIDITY_CHECK_INTERVAL_MS, () => {
-                // Abort if window is gone (destroyed or unmanaged)
-                if (!isWindowAlive(window) || !window.get_workspace()) {
-                    Logger.log('onWindowCreated fallback: window gone - aborting');
+                // Abort if window is gone (destroyed or unmanaged) or poll exhausted
+                if (++fallbackAttempts > constants.GEOMETRY_WAIT_MAX_ATTEMPTS ||
+                    !isWindowAlive(window) || !window.get_workspace()) {
+                    Logger.log('onWindowCreated fallback: window gone or poll exhausted - aborting');
                     return GLib.SOURCE_REMOVE;
                 }
                 if (processWindowCallback() === GLib.SOURCE_REMOVE) {
@@ -1042,7 +1066,7 @@ export const WindowHandler = GObject.registerClass({
         }
     }
 
-    onWindowAdded(workspace, window) {
+    onWindowAdded(_workspace, window) {
         this.windowingManager.invalidateWindowsCache();
         if (!this._ext.windowingManager.isRelated(window)) {
             return;
@@ -1054,10 +1078,12 @@ export const WindowHandler = GObject.registerClass({
         // Mark window as newly added for overflow protection logic
         WindowState.set(window, 'addedTime', Date.now());
 
+        let validityAttempts = 0;
         this._timeoutRegistry.add(constants.WINDOW_VALIDITY_CHECK_INTERVAL_MS, () => {
-            // Abort if window is gone (destroyed or unmanaged)
-            if (!isWindowAlive(window) || !window.get_workspace()) {
-                Logger.log(`window-added: window ${window.get_id()} gone - aborting`);
+            // Abort if window is gone (destroyed or unmanaged) or poll exhausted
+            if (++validityAttempts > constants.GEOMETRY_WAIT_MAX_ATTEMPTS ||
+                !isWindowAlive(window) || !window.get_workspace()) {
+                Logger.log(`window-added: window ${window.get_id()} gone or poll exhausted - aborting`);
                 return GLib.SOURCE_REMOVE;
             }
 
@@ -1076,8 +1102,6 @@ export const WindowHandler = GObject.registerClass({
                     const previousWorkspaceIndex = WindowState.get(WINDOW, 'previousWorkspace');
                     const removedTimestamp = WindowState.get(WINDOW, 'removedTimestamp');
                     const timeSinceRemoved = removedTimestamp ? Date.now() - removedTimestamp : Infinity;
-
-                    const _workArea = WORKSPACE.get_work_area_for_monitor(MONITOR);
 
                     if (previousWorkspaceIndex !== undefined && previousWorkspaceIndex !== WORKSPACE.index() && timeSinceRemoved < constants.SAFETY_TIMEOUT_BUFFER_MS) {
                         // Skip if this is an overflow move, not a real drag-drop
@@ -1105,9 +1129,13 @@ export const WindowHandler = GObject.registerClass({
                     // Mark window as waiting for geometry - prevents premature overflow
                     WindowState.set(WINDOW, 'waitingForGeometry', true);
 
+                    // Repoll while waitForGeometry returns SOURCE_CONTINUE, bounded
+                    // so a window that never reports geometry can't poll forever.
+                    let geometryAttempts = 0;
                     this._timeoutRegistry.add(constants.GEOMETRY_CHECK_DELAY_MS, () => {
-                        this.waitForGeometry(WINDOW, WORKSPACE, MONITOR);
-                        return GLib.SOURCE_REMOVE;
+                        if (++geometryAttempts > constants.GEOMETRY_WAIT_MAX_ATTEMPTS || !isWindowAlive(WINDOW))
+                            return GLib.SOURCE_REMOVE;
+                        return this.waitForGeometry(WINDOW, WORKSPACE, MONITOR);
                     }, 'windowHandler_geometryCheck');
 
                     return GLib.SOURCE_REMOVE;
@@ -1123,16 +1151,28 @@ export const WindowHandler = GObject.registerClass({
             return;
         }
 
+        // On destroy, both the 'unmanaged' handler and the workspace
+        // 'window-removed' signal land here — dedupe so the retile/restore
+        // pipeline (and miniature auto-restore) doesn't run twice.
+        const now = Date.now();
+        const lastHandled = WindowState.get(window, 'removalHandledAt');
+        if (lastHandled && now - lastHandled < constants.SAFETY_TIMEOUT_BUFFER_MS) {
+            Logger.log(`onWindowRemoved: duplicate removal event for ${window.get_id()} - skipping`);
+            return;
+        }
+        WindowState.set(window, 'removalHandledAt', now);
+
         WindowState.set(window, 'previousWorkspace', workspace.index());
-        WindowState.set(window, 'removedTimestamp', Date.now());
+        WindowState.set(window, 'removedTimestamp', now);
 
         // SKIP if window was moved by overflow
         const wasMovedByOverflow = WindowState.get(window, 'movedByOverflow');
 
-        // Capture removed window's size BEFORE any operations
-        const removedFrame = window.get_frame_rect();
-        const freedWidth = removedFrame.width;
-        const freedHeight = removedFrame.height;
+        // Capture removed window's size BEFORE any operations — guarded, the
+        // window may already be disposed when removal comes from a destroy.
+        const removedFrame = isWindowAlive(window) ? window.get_frame_rect() : null;
+        const freedWidth = removedFrame ? removedFrame.width : 0;
+        const freedHeight = removedFrame ? removedFrame.height : 0;
 
         // Capture monitor at event time (window may move monitors during DnD)
         const removedMonitor = window.get_monitor();
