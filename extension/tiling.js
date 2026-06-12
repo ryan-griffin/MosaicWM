@@ -2860,9 +2860,9 @@ class WindowDescriptor {
                             const sc = WindowState.get(window, MINIATURE_SCALE) ?? 1;
                             const extL = WindowState.get(window, MINIATURE_EXT_LEFT) ?? 0;
                             const extT = WindowState.get(window, MINIATURE_EXT_TOP) ?? 0;
-                            applyMiniatureActorState(windowActor, sc, extL, extT, x, y);
-                            WindowState.set(window, MINIATURE_TARGET_POS, { x, y });
-                            WindowState.get(window, MINIATURE_OVERLAY)?.updatePosition();
+                            animateMiniatureToTarget(windowActor, window, sc, extL, extT, x, y,
+                                constants.ANIMATION_DURATION_MS);
+                            WindowState.get(window, MINIATURE_OVERLAY)?.animateToPosition(constants.ANIMATION_DURATION_MS);
                         }
                     } else {
                         const currentRect = window.get_frame_rect();
