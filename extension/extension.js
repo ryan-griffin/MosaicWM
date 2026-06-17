@@ -26,7 +26,7 @@ import { SwappingManager } from './swapping.js';
 import { DrawingManager } from './drawing.js';
 import { AnimationsManager } from './animations.js';
 import { MosaicLayoutStrategy } from './overviewLayout.js';
-import { TimeoutRegistry, afterAnimations } from './timing.js';
+import { TimeoutRegistry, afterAnimations, afterOverviewHidden } from './timing.js';
 import { WindowHandler } from './windowHandler.js';
 import { DragHandler } from './dragHandler.js';
 import { ResizeHandler } from './resizeHandler.js';
@@ -442,7 +442,11 @@ export default class WindowMosaicExtension extends Extension {
         this._wmEventIds.push(global.window_manager.connect('destroy', (_, win) => this.windowHandler.onWindowDestroyed(win.meta_window)));
         this._displayEventIds.push(global.display.connect('grab-op-begin', (display, window, grabpo) => this.dragHandler._grabOpBeginHandler(display, window, grabpo)));
         this._displayEventIds.push(global.display.connect('grab-op-end', (display, window, grabpo) => this.dragHandler._grabOpEndHandler(display, window, grabpo)));
-        this._onOverviewHiddenId = Main.overview.connect('hidden', () => this.windowHandler.onOverviewHidden());
+        this._onOverviewShowingId = Main.overview.connect('showing', () => this.animationsManager.setOverviewActive(true));
+        this._onOverviewHiddenId = Main.overview.connect('hidden', () => {
+            this.animationsManager.setOverviewActive(false);
+            this.windowHandler.onOverviewHidden();
+        });
 
         this._workspaceManEventIds.push(global.workspace_manager.connect('active-workspace-changed', this._workspaceSwitchedHandler));
         this._workspaceManEventIds.push(global.workspace_manager.connect('workspaces-reordered', this._workspacesReorderedHandler));
@@ -556,20 +560,31 @@ export default class WindowMosaicExtension extends Extension {
         // miniaturization candidates and nothing would shrink.
         const resizeResult = this.tilingManager.tryFitWithResize(window, existingWindows, workArea, window);
 
-        if (resizeResult?.success) {
-            this.tilingManager._isSmartResizingBlocked = true;
-            this.tilingManager._restoringWindowId = window.get_id();
-            try {
-                // Pass pending miniatures to tileWorkspaceWindows via instance state;
-                // it'll skip animateReTiling for them and create miniatures itself.
-                this.tilingManager._pendingMiniatureWindows = resizeResult.pendingWindows ?? [];
-                this.tilingManager.tileWorkspaceWindows(workspace, null, monitor, false);
-            } finally {
-                this.tilingManager._isSmartResizingBlocked = false;
-                this.tilingManager._restoringWindowId = null;
+        const doTile = () => {
+            if (resizeResult?.success) {
+                this.tilingManager._isSmartResizingBlocked = true;
+                this.tilingManager._restoringWindowId = window.get_id();
+                try {
+                    this.tilingManager._pendingMiniatureWindows = resizeResult.pendingWindows ?? [];
+                    this.tilingManager.tileWorkspaceWindows(workspace, null, monitor, false);
+                } finally {
+                    this.tilingManager._isSmartResizingBlocked = false;
+                    this.tilingManager._restoringWindowId = null;
+                }
+            } else {
+                this.tilingManager.tileWorkspaceWindows(workspace, window, monitor, false);
             }
+        };
+
+        // When the overview is active, tiling with pending miniatures must wait
+        // until after the exit animation — overview.hide fires before
+        // notify::focus-window on Wayland, so _isOverviewActive is still true
+        // here. Running cascade with animate=true only after 'hidden' ensures a
+        // smooth miniaturization rather than an instant snap.
+        if (this.animationsManager._isOverviewActive) {
+            afterOverviewHidden(doTile, this._timeoutRegistry);
         } else {
-            this.tilingManager.tileWorkspaceWindows(workspace, window, monitor, false);
+            doTile();
         }
     }
 
@@ -751,6 +766,10 @@ export default class WindowMosaicExtension extends Extension {
             eventIds.forEach((eventId) => workspace.disconnect(eventId));
         }
 
+        if (this._onOverviewShowingId) {
+            Main.overview.disconnect(this._onOverviewShowingId);
+            this._onOverviewShowingId = 0;
+        }
         if (this._onOverviewHiddenId) {
             Main.overview.disconnect(this._onOverviewHiddenId);
             this._onOverviewHiddenId = 0;

@@ -28,6 +28,7 @@ export const AnimationsManager = GObject.registerClass({
         this._justEndedDrag = false;
         this._resizingWindowId = null;
         this._timeoutRegistry = null;
+        this._isOverviewActive = false;
     }
 
     setTimeoutRegistry(registry) {
@@ -53,6 +54,10 @@ export const AnimationsManager = GObject.registerClass({
         }
     }
 
+    setOverviewActive(active) {
+        this._isOverviewActive = active;
+    }
+
     setDragging(dragging) {
         // If ending drag, set flag for smooth drop animation
         if (this._isDragging && !dragging) {
@@ -67,6 +72,7 @@ export const AnimationsManager = GObject.registerClass({
 
     shouldAnimateWindow(window, draggedWindow = null) {
         if (!getAnimationsEnabled()) return false;
+        if (this._isOverviewActive) return false;
         // During active resize, position all sibling windows instantly (real-time retile)
         if (this._resizingWindowId !== null) {
             return false;
