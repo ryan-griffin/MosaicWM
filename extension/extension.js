@@ -20,7 +20,7 @@ import { SettingsOverrider } from './settingsOverrider.js';
 import { EdgeTilingManager } from './edgeTiling.js';
 import { TileZone } from './constants.js';
 import { TilingManager } from './tiling.js';
-import { isWindowAlive } from './liveness.js';
+import { isWindowAlive, isWorkspaceAlive } from './liveness.js';
 import { ReorderingManager } from './reordering.js';
 import { SwappingManager } from './swapping.js';
 import { DrawingManager } from './drawing.js';
@@ -178,7 +178,7 @@ export default class WindowMosaicExtension extends Extension {
     // Drop bookkeeping for destroyed workspaces — their signals die with the
     // object, and disconnecting them on disable() would target a dead GObject.
     _workspaceRemovedSignal = () => {
-        this._workspaceEventIds = this._workspaceEventIds.filter(([workspace]) => workspace.index() >= 0);
+        this._workspaceEventIds = this._workspaceEventIds.filter(([workspace]) => isWorkspaceAlive(workspace, this._workspaceManager));
     };
 
     enable() {

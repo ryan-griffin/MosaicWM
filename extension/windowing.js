@@ -409,7 +409,17 @@ export const WindowingManager = GObject.registerClass({
         // Queue in idle with low priority to let GNOME settle its dynamic workspace states
         this._timeoutRegistry.addIdle(() => {
             const workspaceManager = global.workspace_manager;
-            const currentIndex = workspace.index();
+
+            // workspace.index() asserts in libmutter if GNOME already auto-removed
+            // this (now-empty) workspace from the manager before this idle ran -
+            // check membership by reference instead of calling the native lookup.
+            let currentIndex = -1;
+            for (let i = 0; i < workspaceManager.get_n_workspaces(); i++) {
+                if (workspaceManager.get_workspace_by_index(i) === workspace) {
+                    currentIndex = i;
+                    break;
+                }
+            }
 
             if (currentIndex < 0) return GLib.SOURCE_REMOVE;
 
