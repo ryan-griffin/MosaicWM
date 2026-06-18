@@ -2493,7 +2493,7 @@ export const TilingManager = GObject.registerClass({
                 const min = this.getWindowMinimumSize(w);
                 const isResizable = w.allows_resize && w.allows_resize();
 
-                windowData.set(w.get_id(), { window: w, current, min, isResizable });
+                windowData.set(w.get_id(), { window: w, current, preferred, min, isResizable });
                 if (isResizable) allResizable.push(w);
             }
 
@@ -2553,9 +2553,11 @@ export const TilingManager = GObject.registerClass({
                         ).length;
                         if (nonMiniCount <= 1) break;
 
-                        // Use preferred size (not smart-resized frame) so the miniature restores to the natural size.
+                        // d.current can resolve to targetSmartResizeSize (already shrunk) when
+                        // preferredSize/openingSize are both missing, so prefer those explicitly.
                         const frame   = w.get_frame_rect();
-                        const preSize = { x: frame.x, y: frame.y, width: d.current.width, height: d.current.height };
+                        const natural = d.preferred || d.current;
+                        const preSize = { x: frame.x, y: frame.y, width: natural.width, height: natural.height };
                         const scale   = constants.MINIATURE_TARGET_SIZE_PX / Math.max(preSize.width, preSize.height);
                         d.pendingMiniature = true;
                         d.miniSize         = { width: Math.round(preSize.width * scale), height: Math.round(preSize.height * scale) };
@@ -2636,9 +2638,11 @@ export const TilingManager = GObject.registerClass({
                     candidateData.miniatureTargetSlot = null;
                     Logger.log(`[MINIATURE] Marking ${candidateSim.id} as PENDING miniature (will be created after layout)`);
 
-                    // Use preferred size so the miniature restores to the window's natural size.
+                    // candidateData.current can resolve to targetSmartResizeSize (already shrunk)
+                    // when preferredSize/openingSize are both missing, so prefer those explicitly.
                     const frame4a   = candidateData.window.get_frame_rect();
-                    const preSize   = { x: frame4a.x, y: frame4a.y, width: candidateData.current.width, height: candidateData.current.height };
+                    const natural4a = candidateData.preferred || candidateData.current;
+                    const preSize   = { x: frame4a.x, y: frame4a.y, width: natural4a.width, height: natural4a.height };
                     const scale     = constants.MINIATURE_TARGET_SIZE_PX / Math.max(preSize.width, preSize.height);
                     const miniSize  = { width: Math.round(preSize.width * scale), height: Math.round(preSize.height * scale) };
                     candidateData.miniSize = miniSize;
