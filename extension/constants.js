@@ -47,6 +47,9 @@ export const SACRED_RESTORE_SAFETY_TIMEOUT_MS = 1500;
 // New windows fire both window-created and window-added, which would otherwise
 // evaluate them twice. Skip a re-enqueue if we just evaluated this window.
 export const DUPLICATE_EVALUATION_WINDOW_MS = 300;
+// Wait this long after a maximize before isolating the window, so a quick
+// maximize/unmaximize toggle never even starts the move.
+export const SACRED_ENTER_DEBOUNCE_MS = 200;
 
 // Threshold for identifying significant changes in window geometry for animations
 export const ANIMATION_DIFF_THRESHOLD = 10;

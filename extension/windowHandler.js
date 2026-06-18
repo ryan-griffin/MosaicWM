@@ -273,83 +273,46 @@ export const WindowHandler = GObject.registerClass({
                     pendingMaximizeCheck = false;
                     if (!isWindowAlive(win)) return GLib.SOURCE_REMOVE;
 
+                    // Entering/exiting sacred state is owned by resizeHandler, normally
+                    // driven by the WM size-change signal. This property notify is a
+                    // backup for apps where that signal doesn't fire reliably - calling
+                    // these twice for the same transition is safe (see resizeHandler.js).
                     if (this.windowingManager.isMaximizedOrFullscreen(win)) {
-                        // Skip if this is a window that opened maximized — already handled by onWindowCreated
-                        if (WindowState.get(win, 'openedMaximized')) {
-                            return GLib.SOURCE_REMOVE;
+                        if (!WindowState.get(win, 'openedMaximized')) {
+                            this._ext.resizeHandler.tryEnterSacred(win);
                         }
-
-                        Logger.log(`Window ${win.get_id()} entered a sacred state (Maximized) - checking for isolation`);
-                        const workspace = win.get_workspace();
-
-                        if (this._ext && !this._ext.isMosaicEnabledForWorkspace(workspace)) {
-                            Logger.log(`Workspace has mosaic disabled - skipping isolation for maximized window ${win.get_id()}`);
-                        } else {
-                            const monitor = win.get_monitor();
-                            const workspaceWindows = this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor);
-
-                            if (workspaceWindows.length > 1) {
-                                Logger.log(`[SACRED-A-ENTER] Window ${win.get_id()} maximized in occupied workspace - isolating`);
-                                WindowState.set(win, 'sacredOriginWorkspace', workspace.index());
-                                this.windowingManager.moveOversizedWindow(win).catch(e =>
-                                    Logger.error(`Sacred maximize isolation failed: ${e}`));
-                            }
-                        }
+                    } else if (WindowState.get(win, 'openedMaximized')) {
+                        Logger.log(`Window ${win.get_id()} born maximized - skipping sacred exit, treating as normal unmaximize`);
+                        WindowState.remove(win, 'openedMaximized');
+                        WindowState.remove(win, 'unmaximizing');
+                        WindowState.remove(win, 'isEnteringSacred');
+                        const ws = win.get_workspace();
+                        const mon = win.get_monitor();
+                        if (ws) this.tilingManager.tileWorkspaceWindows(ws, win, mon);
                     } else {
-                        // Windows born maximized don't need the sacred exit state machine
-                        if (WindowState.get(win, 'openedMaximized')) {
-                            Logger.log(`Window ${win.get_id()} born maximized - skipping sacred exit, treating as normal unmaximize`);
-                            WindowState.remove(win, 'openedMaximized');
-                            WindowState.remove(win, 'unmaximizing');
-                            WindowState.remove(win, 'isEnteringSacred');
-                            const ws = win.get_workspace();
-                            const mon = win.get_monitor();
-                            if (ws) this.tilingManager.tileWorkspaceWindows(ws, win, mon);
-                        } else {
-                            Logger.log(`[SACRED-A-EXIT] Window ${win.get_id()} exited a sacred state (Unmaximized) - starting state machine`);
-                            this.handleSacredExit(win);
-                        }
+                        this._ext.resizeHandler.tryExitSacred(win);
                     }
                     return GLib.SOURCE_REMOVE;
                 });
             }));
         });
 
-        // Detect Fullscreen changes
+        // Detect Fullscreen changes - same backup pattern as maximize above.
         ids.push(window.connect('notify::fullscreen', (win) => {
             if (this.windowingManager.isMaximizedOrFullscreen(win)) {
-                // Skip if this is a window that opened maximized/fullscreen
-                if (WindowState.get(win, 'openedMaximized')) return;
-
-                // Entered Fullscreen: Move to new workspace if current is occupied.
-                const workspace = win.get_workspace();
-                if (this._ext && !this._ext.isMosaicEnabledForWorkspace(workspace)) {
-                    Logger.log(`Workspace has mosaic disabled - skipping isolation for fullscreen window ${win.get_id()}`);
-                } else {
-                    const monitor = win.get_monitor();
-                    const workspaceWindows = this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor);
-
-                    if (workspaceWindows.length > 1) {
-                        Logger.log(`[SACRED-A-ENTER] Window ${win.get_id()} entered FULLSCREEN in occupied workspace - isolating`);
-                        // Save origin for restoration later
-                        WindowState.set(win, 'sacredOriginWorkspace', workspace.index());
-                        this.windowingManager.moveOversizedWindow(win).catch(e =>
-                            Logger.error(`Sacred fullscreen isolation failed: ${e}`));
-                    }
+                if (!WindowState.get(win, 'openedMaximized')) {
+                    this._ext.resizeHandler.tryEnterSacred(win);
                 }
+            } else if (WindowState.get(win, 'openedMaximized')) {
+                Logger.log(`Window ${win.get_id()} born fullscreen - skipping sacred exit, treating as normal`);
+                WindowState.remove(win, 'openedMaximized');
+                WindowState.remove(win, 'unmaximizing');
+                WindowState.remove(win, 'isEnteringSacred');
+                const ws = win.get_workspace();
+                const mon = win.get_monitor();
+                if (ws) this.tilingManager.tileWorkspaceWindows(ws, win, mon);
             } else {
-                if (WindowState.get(win, 'openedMaximized')) {
-                    Logger.log(`Window ${win.get_id()} born fullscreen - skipping sacred exit, treating as normal`);
-                    WindowState.remove(win, 'openedMaximized');
-                    WindowState.remove(win, 'unmaximizing');
-                    WindowState.remove(win, 'isEnteringSacred');
-                    const ws = win.get_workspace();
-                    const mon = win.get_monitor();
-                    if (ws) this.tilingManager.tileWorkspaceWindows(ws, win, mon);
-                } else {
-                    Logger.log(`[SACRED-A-EXIT] Window ${win.get_id()} exited fullscreen - starting state machine`);
-                    this.handleSacredExit(win);
-                }
+                this._ext.resizeHandler.tryExitSacred(win);
             }
         }));
 
@@ -403,43 +366,6 @@ export const WindowHandler = GObject.registerClass({
         // Clean up other states
         WindowState.remove(window, 'previousExclusionState');
         WindowState.remove(window, 'previousWorkspace');
-    }
-
-    // State Machine: Defer move until window has finished resizing in place.
-    handleSacredExit(window) {
-        // Idempotency: skip if already processing this sacred exit
-        if (WindowState.get(window, 'isRestoringSacred') !== undefined) {
-            Logger.log(`[SACRED-A-DEDUP] handleSacredExit: Already restoring ${window.get_id()} - skipping duplicate`);
-            return;
-        }
-
-        this.windowingManager.invalidateWindowsCache();
-        const originIndex = WindowState.get(window, 'sacredOriginWorkspace');
-
-        // Always set these flags to prevent giant dimensions during the in-place resize
-        const preferredSize = WindowState.get(window, 'preferredSize') || WindowState.get(window, 'openingSize');
-        if (preferredSize) {
-            WindowState.set(window, 'targetRestoredSize', { width: preferredSize.width, height: preferredSize.height });
-            WindowState.set(window, 'unmaximizing', true);
-        }
-
-        if (originIndex !== undefined) {
-            Logger.log(`[SACRED-A-DEFER] Sacred exit detected for ${window.get_id()}. Flagging for deferred move to WS ${originIndex}.`);
-            WindowState.set(window, 'isRestoringSacred', originIndex);
-            this._ext.resizeHandler.scheduleSacredRestoreSafety(window, originIndex);
-
-            // Re-tile the current workspace immediately (it's leaving this spot)
-            const workspace = window.get_workspace();
-            const monitor = window.get_monitor();
-            this.tilingManager.tileWorkspaceWindows(workspace, null, monitor);
-        } else {
-            // No workspace move needed — clear transition flags after settle
-            this._timeoutRegistry.add(constants.RESIZE_SETTLE_DELAY_MS, () => {
-                WindowState.remove(window, 'unmaximizing');
-                WindowState.remove(window, 'targetRestoredSize');
-                return GLib.SOURCE_REMOVE;
-            }, 'windowHandler_settleSacredExit');
-        }
     }
 
     // Handle window unmaximize event.
@@ -1018,10 +944,6 @@ export const WindowHandler = GObject.registerClass({
 
                     if(otherWindows.length > 0) {
                         Logger.log('Opened sacred (Max/Full) in occupied workspace - isolating (SACRED)');
-                        // Only save origin for user-maximized windows, not windows born maximized
-                        if (!WindowState.get(window, 'openedMaximized')) {
-                            WindowState.set(window, 'sacredOriginWorkspace', workspace.index());
-                        }
                         this.windowingManager.moveOversizedWindow(window).catch(e =>
                             Logger.error(`Sacred open isolation failed: ${e}`));
                         return GLib.SOURCE_REMOVE;

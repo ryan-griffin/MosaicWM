@@ -10,7 +10,7 @@ import * as WindowState from './windowState.js';
 import * as constants from './constants.js';
 import { TileZone } from './constants.js';
 import { isResizeGrabOp } from './grabOps.js';
-import { isWorkspaceAlive } from './liveness.js';
+import { isWorkspaceAlive, isWindowAlive } from './liveness.js';
 
 import GObject from 'gi://GObject';
 
@@ -144,62 +144,118 @@ export const ResizeHandler = GObject.registerClass({
     onSizeChange = (_, win, mode) => {
         const window = win.meta_window;
         if (!this.windowingManager.isExcluded(window)) {
-            const workspace = window.get_workspace();
-            const monitor = window.get_monitor();
-
             if (mode === Meta.SizeChange.FULLSCREEN || mode === Meta.SizeChange.MAXIMIZE) {
-                // Detect born-maximized: size-change fires BEFORE window-created for new windows.
-                // A window with no preferredSize/openingSize hasn't been through onWindowCreated yet.
-                if (!WindowState.get(window, 'preferredSize') &&
-                    !WindowState.get(window, 'openingSize') &&
-                    this.windowingManager.isMaximizedOrFullscreen(window)) {
-                    WindowState.set(window, 'openedMaximized', true);
-                    Logger.log(`onSizeChange: Detected born-maximized window ${window.get_id()} - skipping isolation`);
-                    return;
-                }
-                // Born-maximized guard (from onWindowCreated - for subsequent maximize events)
-                if (WindowState.get(window, 'openedMaximized')) {
-                    return;
-                }
-                // LOCK: Set flag to block onSizeChanged from saving giant dimensions
-                WindowState.set(window, 'isEnteringSacred', true);
-                
-                if (this._ext && !this._ext.isMosaicEnabledForWorkspace(workspace)) {
-                    Logger.log('User entering sacred state, but mosaic is disabled - skipping isolation');
-                } else if (this.windowingManager.isMaximizedOrFullscreen(window) && 
-                    this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor).length > 1) {
-                    
-                    Logger.log('[SACRED-B-ENTER] User entering sacred state - moving to new workspace');
-                    const originalWorkspaceIndex = workspace.index();
-                    const preMaxSize = WindowState.get(window, 'preferredSize') || WindowState.get(window, 'openingSize');
-                    
-                    this.windowingManager.moveOversizedWindow(window).then((newWorkspace) => {
-                        if (newWorkspace) {
-                            WindowState.set(window, 'maximizedUndoInfo', {
-                                originalWorkspace: originalWorkspaceIndex,
-                                currentWorkspace: newWorkspace.index(),
-                                monitor: monitor,
-                                preMaxSize: preMaxSize
-                            });
-                            this.tilingManager.tileWorkspaceWindows(workspace, null, monitor, false);
-                        }
-                    });
-                }
-            } else if (mode === Meta.SizeChange.UNMAXIMIZE) {
-                // Born-maximized windows: don't set unmaximizing flag or try undo
-                if (WindowState.get(window, 'openedMaximized')) {
-                    return;
-                }
-                WindowState.set(window, 'unmaximizing', true);
-                const maxInfo = WindowState.get(window, 'maximizedUndoInfo');
-                if (maxInfo) {
-                    Logger.log(`[SACRED-B-EXIT] Window ${window.get_id()} was unmaximized - attempting undo`);
-                    this.handleUnmaximizeUndo(window, maxInfo);
-                    WindowState.remove(window, 'maximizedUndoInfo');
-                }
+                this.tryEnterSacred(window);
+            } else if (mode === Meta.SizeChange.UNMAXIMIZE || mode === Meta.SizeChange.UNFULLSCREEN) {
+                this.tryExitSacred(window);
             }
         }
     };
+
+    // Isolates a maximized/fullscreen window to its own workspace, after a short
+    // debounce so a quick toggle back never even starts the move. Some apps'
+    // fullscreen doesn't reliably trigger window_manager's size-change signal, so
+    // this is also called from windowHandler's notify::fullscreen as a backup -
+    // the pending flag below makes calling it twice for the same transition safe.
+    tryEnterSacred(window) {
+        // Detect born-maximized: size-change fires BEFORE window-created for new windows.
+        // A window with no preferredSize/openingSize hasn't been through onWindowCreated yet.
+        if (!WindowState.get(window, 'preferredSize') &&
+            !WindowState.get(window, 'openingSize') &&
+            this.windowingManager.isMaximizedOrFullscreen(window)) {
+            WindowState.set(window, 'openedMaximized', true);
+            Logger.log(`tryEnterSacred: Detected born-maximized window ${window.get_id()} - skipping isolation`);
+            return;
+        }
+        // Born-maximized guard (from onWindowCreated - for subsequent maximize events)
+        if (WindowState.get(window, 'openedMaximized')) {
+            return;
+        }
+        if (WindowState.get(window, 'sacredEnterPending')) {
+            return;
+        }
+
+        const workspace = window.get_workspace();
+        const monitor = window.get_monitor();
+
+        // LOCK: Set flag to block onSizeChanged from saving giant dimensions
+        WindowState.set(window, 'isEnteringSacred', true);
+
+        if (this._ext && !this._ext.isMosaicEnabledForWorkspace(workspace)) {
+            Logger.log('User entering sacred state, but mosaic is disabled - skipping isolation');
+            return;
+        }
+        if (!this.windowingManager.isMaximizedOrFullscreen(window) ||
+            this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor).length <= 1) {
+            return;
+        }
+
+        Logger.log('[SACRED-ENTER] User entering sacred state - debouncing before moving to new workspace');
+        WindowState.set(window, 'sacredEnterPending', true);
+        const preMaxSize = WindowState.get(window, 'preferredSize') || WindowState.get(window, 'openingSize');
+
+        this._timeoutRegistry.add(constants.SACRED_ENTER_DEBOUNCE_MS, () => {
+            WindowState.remove(window, 'sacredEnterPending');
+
+            if (!isWindowAlive(window) || !this.windowingManager.isMaximizedOrFullscreen(window)) {
+                Logger.log(`[SACRED-ENTER] Window ${window.get_id()} already left sacred state - skipping isolation`);
+                return GLib.SOURCE_REMOVE;
+            }
+
+            const currentWorkspace = window.get_workspace();
+            const currentMonitor = window.get_monitor();
+            if (!currentWorkspace || this.windowingManager.getMonitorWorkspaceWindows(currentWorkspace, currentMonitor).length <= 1) {
+                Logger.log(`[SACRED-ENTER] Window ${window.get_id()} workspace no longer occupied - skipping isolation`);
+                return GLib.SOURCE_REMOVE;
+            }
+
+            Logger.log('[SACRED-ENTER] Still in sacred state after debounce - moving to new workspace');
+            const originalWorkspaceIndex = currentWorkspace.index();
+
+            this.windowingManager.moveOversizedWindow(window).then((newWorkspace) => {
+                if (newWorkspace) {
+                    WindowState.set(window, 'maximizedUndoInfo', {
+                        originalWorkspace: originalWorkspaceIndex,
+                        currentWorkspace: newWorkspace.index(),
+                        monitor: currentMonitor,
+                        preMaxSize: preMaxSize
+                    });
+                    this.tilingManager.tileWorkspaceWindows(currentWorkspace, null, currentMonitor, false);
+                }
+            }).catch(e => Logger.error(`Sacred isolation failed: ${e}`));
+            return GLib.SOURCE_REMOVE;
+        }, 'resizeHandler_sacredEnterDebounce');
+    }
+
+    // Mirrors tryEnterSacred: also called from windowHandler's notify::fullscreen
+    // as a backup, in case the size-change signal didn't fire for this exit either.
+    // maximizedUndoInfo gets removed right after use, so calling this twice for the
+    // same exit is safe - the second call just finds nothing left to undo.
+    tryExitSacred(window) {
+        // Born-maximized windows: don't set unmaximizing flag or try undo
+        if (WindowState.get(window, 'openedMaximized')) {
+            return;
+        }
+        WindowState.set(window, 'unmaximizing', true);
+        const maxInfo = WindowState.get(window, 'maximizedUndoInfo');
+        if (maxInfo) {
+            Logger.log(`[SACRED-EXIT] Window ${window.get_id()} was unmaximized - attempting undo`);
+            this.handleUnmaximizeUndo(window, maxInfo);
+            WindowState.remove(window, 'maximizedUndoInfo');
+        } else {
+            // Window was never isolated (it was alone in its workspace), so there's
+            // nothing to undo - just let the transition flags clear after it settles.
+            const preferredSize = WindowState.get(window, 'preferredSize') || WindowState.get(window, 'openingSize');
+            if (preferredSize) {
+                WindowState.set(window, 'targetRestoredSize', preferredSize);
+            }
+            this._timeoutRegistry.add(constants.RESIZE_SETTLE_DELAY_MS, () => {
+                WindowState.remove(window, 'unmaximizing');
+                WindowState.remove(window, 'targetRestoredSize');
+                return GLib.SOURCE_REMOVE;
+            }, 'resizeHandler_settleSoloUnmaximize');
+        }
+    }
 
     onSizeChanged = (_, win) => {
         const window = win.meta_window;
@@ -623,7 +679,7 @@ export const ResizeHandler = GObject.registerClass({
         }
         
         if (!canFit) {
-            Logger.log(`[SACRED-B-STAY] handleUnmaximizeUndo: Window ${windowId} unable to fit even with Smart Resize - staying in current workspace`);
+            Logger.log(`[SACRED-STAY] handleUnmaximizeUndo: Window ${windowId} unable to fit even with Smart Resize - staying in current workspace`);
             this.tilingManager.tileWorkspaceWindows(currentWorkspace, window, monitor);
             return;
         }
@@ -651,6 +707,6 @@ export const ResizeHandler = GObject.registerClass({
             WindowState.set(window, 'pendingMiniaturesForReturn', pendingMiniatures);
         }
         this.scheduleSacredRestoreSafety(window, origIndex);
-        Logger.log(`[SACRED-B-DEFER] Window ${windowId} resizing in place before deferred move to WS ${origIndex}`);
+        Logger.log(`[SACRED-DEFER] Window ${windowId} resizing in place before deferred move to WS ${origIndex}`);
     }
 } );
