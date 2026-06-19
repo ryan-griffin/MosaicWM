@@ -13,7 +13,7 @@ A GNOME Shell extension that provides automatic window tiling in a mosaic layout
 > [!IMPORTANT]
 > Requires GNOME Shell 50+ (Mutter 50). See [this post](https://floss.social/@CleoMenezesJr/116259051479532655) for details.
 
-## 💡 Philosophy
+## Philosophy
 
 Traditional window management forces users to manually position and resize windows. Mosaic WM takes a different approach:
 
@@ -24,39 +24,39 @@ Traditional window management forces users to manually position and resize windo
 
 This aligns with GNOME's philosophy of reducing cognitive load and letting users focus on their work, not window management.
 
-## ✨ Features
+## Features
 
 ### Core Tiling
-- 🎯 **Automatic Mosaic Layout**: Windows are automatically arranged in an optimal layout using a radial packing algorithm
-- 🔄 **Smart Resize**: Before moving windows to new workspaces, the extension tries to resize existing windows to make space
-- 📐 **Edge Tiling (Snap Zones)**: Drag windows to screen edges for half/quarter tiling - remaining windows adapt to the available space
-- 🔀 **Window Swapping**: Drag a window onto another to swap their positions
+- **Automatic Mosaic Layout**: Windows are automatically arranged in an optimal layout using a radial packing algorithm
+- **Smart Resize**: Before moving windows to new workspaces, the extension tries to resize existing windows to make space
+- **Edge Tiling (Snap Zones)**: Drag windows to screen edges for half/quarter tiling - remaining windows adapt to the available space
+- **Window Swapping**: Drag a window onto another to swap their positions
 
 ### Miniature Windows
-- 🪟 **Miniature Overflow**: When too many windows share a workspace, the oldest ones shrink into small interactive thumbnails. They stay visible and clickable without cluttering the layout
-- 👆 **One-click Restore**: Click any miniature to bring it back to full size. The previously focused window becomes the new miniature seamlessly
-- 🔍 **Overview Integration**: Miniatures maintain their scale and position when entering or leaving the GNOME Overview
+- **Miniature Overflow**: When too many windows share a workspace, the oldest ones shrink into small interactive thumbnails. They stay visible and clickable without cluttering the layout
+- **One-click Restore**: Click any miniature to bring it back to full size. The previously focused window becomes the new miniature seamlessly
+- **Overview Integration**: Miniatures maintain their scale and position when entering or leaving the GNOME Overview
 
 ### Overflow & Workspaces
-- 🚀 **Intelligent Overflow**: Windows that can't be miniaturized (e.g. they hit minimum size) are moved to existing workspaces when possible, or create new ones
-- 🖥️ **Fullscreen Support**: Fullscreen and maximized windows automatically get dedicated workspaces
-- 🔙 **Reverse Smart Resize**: When windows close or are miniaturized, remaining windows expand back toward their preferred sizes
+- **Intelligent Overflow**: Windows that can't be miniaturized (e.g. they hit minimum size) are moved to existing workspaces when possible, or create new ones
+- **Fullscreen Support**: Fullscreen and maximized windows automatically get dedicated workspaces
+- **Reverse Smart Resize**: When windows close or are miniaturized, remaining windows expand back toward their preferred sizes
 
 ### Animations & Polish
-- ✨ **Directional Momentum**: Windows slide in from the direction they came from, with a bouncy animation
-- 🎬 **Smooth Transitions**: All layout changes are animated for a polished feel
-- 👁️ **Visual Feedback**: Live preview during drag operations shows where windows will land
+- **Directional Momentum**: Windows slide in from the direction they came from, with a bouncy animation
+- **Smooth Transitions**: All layout changes are animated for a polished feel
+- **Visual Feedback**: Live preview during drag operations shows where windows will land
 
 ### Other
-- ⌨️ **Keyboard Shortcuts**: Swap windows with keyboard (configurable)
-- 🖥️ **Multi-Monitor**: Works across multiple displays (experimental)
+- **Keyboard Shortcuts**: Swap windows with keyboard (configurable)
+- **Multi-Monitor**: Works across multiple displays (experimental)
 
 ### Quick Settings
-- 🎛️ **Per-Workspace Toggle**: Enable or disable mosaic on individual workspaces from the Quick Settings menu
-- 🔘 **Global Toggle**: Master switch to quickly enable/disable mosaic on all workspaces
-- 📍 **Dynamic Indicator**: Top bar icon shows mosaic status for the current workspace
+- **Per-Workspace Toggle**: Enable or disable mosaic on individual workspaces from the Quick Settings menu
+- **Global Toggle**: Master switch to quickly enable/disable mosaic on all workspaces
+- **Dynamic Indicator**: Top bar icon shows mosaic status for the current workspace
 
-## 📦 Installation
+## Installation
 
 ### From Source
 
@@ -80,7 +80,7 @@ gnome-extensions enable mosaicwm@cleomenezesjr.github.io
 4. Restart GNOME Shell (log out and log back in)
 5. Enable via Extensions app or: `gnome-extensions enable mosaicwm@cleomenezesjr.github.io`
 
-## 🎮 Usage
+## Usage
 
 Once enabled, the extension works automatically:
 
@@ -146,42 +146,42 @@ For more information on GNOME Shell extension development:
 - [GJS Extension Development Guide](https://gjs.guide/extensions/development/debugging.html)
 - [GNOME Shell Extensions Documentation](https://gjs.guide/extensions/)
 
-## 💖 Support
+## Support
 
 If Mosaic WM has been useful to you, consider supporting its development. :)
 
 [<img src="https://raw.githubusercontent.com/CleoMenezesJr/flatline/1e3b5252c5955d8918a7751aea854a830616d696/other/promotion/badges/donate_paypal.svg" height=29px alt="Paypal donation">](https://www.paypal.com/donate/?hosted_button_id=7KDCH44AMMCS2)
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/cleomenezesjr)
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/CleoMenezesJr?logo=githubsponsors&label=Sponsor)](https://github.com/sponsors/CleoMenezesJr)
+[<img src="https://ko-fi.com/img/githubbutton_sm.svg" height=29px alt="ko-fi">](https://ko-fi.com/cleomenezesjr)
+[<img src="https://img.shields.io/github/sponsors/CleoMenezesJr?logo=githubsponsors&label=Sponsor" height=29px alt="GitHub Sponsors">](https://github.com/sponsors/CleoMenezesJr)
 
-## 🤝 Contributing
+## Contributing
 
 > [!NOTE]
 > This project is in early development with rapidly changing code. Code contributions are not currently accepted due to the high velocity of changes.
 
 **Best ways to contribute right now:**
 
-- 🧪 **Testing**: Try the extension and explore edge cases. Join the testers room on Matrix: [#mosaicwm:matrix.org](https://matrix.to/#/%23mosaicwm:matrix.org)
-- 🐛 **Bug Reports**: Open issues with detailed reproduction steps
-- 💡 **Feature Ideas**: Share suggestions in GitHub Issues
-- ✍️ **Documentation**: Add comments explaining the **WHY**: constraints, invariants, and non-obvious behavior. Well-named code already explains the what.
-- 🏛️ **Compliance**: All contributions must follow the [GNOME Shell Extensions Review Guidelines](https://gjs.guide/extensions/review-guidelines.html).
+- **Testing**: Try the extension and explore edge cases. Join the testers room on Matrix: [#mosaicwm:matrix.org](https://matrix.to/#/%23mosaicwm:matrix.org)
+- **Bug Reports**: Open issues with detailed reproduction steps
+- **Feature Ideas**: Share suggestions in GitHub Issues
+- **Documentation**: Add comments explaining the **WHY**: constraints, invariants, and non-obvious behavior. Well-named code already explains the what.
+- **Compliance**: All contributions must follow the [GNOME Shell Extensions Review Guidelines](https://gjs.guide/extensions/review-guidelines.html).
 
 > [!IMPORTANT]
 > **For development**: Ensure `DEBUG = true` in `extension/logger.js` to see verbose logs.
 
-## 📝 License
+## License
 
 This project is licensed under the GNU General Public License v2.0 or later - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Kudos to [heikkiket/window-mosaic-mode](https://gitlab.gnome.org/heikkiket/window-mosaic-mode) for the original concept and implementation
 - Inspired by [Tobias Bernard's vision for GNOME window management](https://blogs.gnome.org/tbernard/2023/07/26/rethinking-window-management/)
 - GNOME Shell team for the excellent extension API
 - Contributors and testers
 
-## 🐛 Known Issues
+## Known Issues
 
 **Current limitations:**
 
