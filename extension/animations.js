@@ -217,7 +217,16 @@ export const AnimationsManager = GObject.registerClass({
         const initialScaleY = targetRect.height > 0 ? (currentFrame.height * currentScaleY) / targetRect.height : 1;
 
         WindowState.set(window, 'isMosaicResizing', true);
+        // A pure move applies to the actor's allocation immediately, but a Wayland
+        // client only commits a matching buffer for an actual size change some time
+        // after the configure request, not synchronously here. Moving first, before
+        // asking for the new size, means the position component is already correct
+        // by the time set_translation reads it below, regardless of how long the
+        // resize itself takes to land. The size mismatch in the meantime is already
+        // covered by the scale animation below, which doesn't depend on this.
+        window.move_frame(userOp, targetRect.x, targetRect.y);
         window.move_resize_frame(userOp, targetRect.x, targetRect.y, targetRect.width, targetRect.height);
+
         windowActor.set_translation(initialTx, initialTy, 0);
         if (!skipScale) {
             windowActor.set_pivot_point(0, 0);
@@ -319,7 +328,7 @@ export const AnimationsManager = GObject.registerClass({
         return this._pendingEntranceEases.has(id) || this._animatingWindows.has(id);
     }
 
-    animateReTiling(windowLayouts, draggedWindow = null) {
+    animateReTiling(windowLayouts, draggedWindow = null, miniLayouts = []) {
         for (const { window, rect } of windowLayouts) {
             // Cleared by animateWindow once this placement actually finishes (not
             // here), since a single window-open burst can recurse through several
@@ -342,8 +351,11 @@ export const AnimationsManager = GObject.registerClass({
                 continue;
             }
 
+            // Include pending miniature siblings too: they're real neighbors for
+            // direction purposes even though they're excluded from windowLayouts
+            // (createMiniature owns their own animation, not this loop).
             const slideInOffset = isFirstPlacement
-                ? this._computeSlideInOffset(window, rect, windowLayouts)
+                ? this._computeSlideInOffset(window, rect, windowLayouts.concat(miniLayouts))
                 : null;
 
             this.animateWindow(window, rect, { draggedWindow, firstPlacement: isFirstPlacement, slideInOffset });

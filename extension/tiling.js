@@ -94,7 +94,21 @@ export const TilingManager = GObject.registerClass({
 
     // Smart Resize sites only ever change width/height at the window's current
     // position, so x/y always come from the frame already read at the call site.
-    _animateResize(window, frame, width, height) {
+    // A first placement window doesn't have a real position yet, only wherever
+    // Mutter happened to spawn it, so applying that here would move_resize_frame
+    // it to that meaningless spot.
+    //
+    // deferToRetile: tryFitWithResize and rebalanceSmartResize both call this and
+    // then immediately call tileWorkspaceWindows in the same tick, which does its
+    // own move_resize_frame combining the same size with the window's real tiled
+    // position. Animating here too means two separate Wayland geometry requests
+    // for the same window back to back: the first commit shows the resize at the
+    // old spot, the second shows the push, reading as two sequential animations
+    // instead of one. Skip the actual move+ease here and let that next pass be
+    // the only one that touches the frame, since it already has the right size
+    // (read from targetSmartResizeSize, set independently of this call).
+    _animateResize(window, frame, width, height, deferToRetile = false) {
+        if (deferToRetile || WindowState.get(window, 'pendingFirstPlacement')) return;
         this._animationsManager?.animateWindow(window, { x: frame.x, y: frame.y, width, height });
     }
 
@@ -1336,7 +1350,12 @@ export const TilingManager = GObject.registerClass({
             const _y = tile_info.y;
 
             const windowLayouts = [];
-            
+            // Pending miniature windows are kept out of windowLayouts (createMiniature
+            // owns their visual animation), but a first placement sibling still needs
+            // to know they're there to compute a slide-in direction against. Tracked
+            // separately so animateReTiling can see them without animating them.
+            const miniLayouts = [];
+
             if (!tile_info.vertical) {
                 let y = _y;
                 for (const level of levels) {
@@ -1376,6 +1395,7 @@ export const TilingManager = GObject.registerClass({
                                 const slot = { x, y: y + y_offset, width: windowDesc.width, height: windowDesc.height };
                                 ComputedLayouts.set(window, slot);
                                 if (slotsOut) slotsOut.set(window.get_id(), slot);
+                                miniLayouts.push({ window, rect: slot });
                                 Logger.log(`[LAYOUT] H pending-mini ${window.get_id()}: slot=(${slot.x},${slot.y}) size=${slot.width}x${slot.height}`);
                             } else {
                                 Logger.log(`[LAYOUT] H window ${window.get_id()}: target=(${x},${y + y_offset}) size=${windowDesc.width}x${windowDesc.height}`);
@@ -1426,6 +1446,7 @@ export const TilingManager = GObject.registerClass({
                                 const slot = { x: targetX, y: targetY, width: windowDesc.width, height: windowDesc.height };
                                 ComputedLayouts.set(window, slot);
                                 if (slotsOut) slotsOut.set(window.get_id(), slot);
+                                miniLayouts.push({ window, rect: slot });
                                 Logger.log(`[LAYOUT] V pending-mini ${window.get_id()}: slot=(${slot.x},${slot.y}) size=${slot.width}x${slot.height}`);
                             } else {
                                 Logger.log(`[LAYOUT] V window ${window.get_id()}: target=(${targetX},${targetY}) size=${windowDesc.width}x${windowDesc.height}`);
@@ -1441,7 +1462,7 @@ export const TilingManager = GObject.registerClass({
                 }
             }
             
-            this._animationsManager.animateReTiling(windowLayouts, draggedWindow);
+            this._animationsManager.animateReTiling(windowLayouts, draggedWindow, miniLayouts);
         }
 
         // Release workspace lock after signals from move_resize have likely fired.
@@ -2533,7 +2554,7 @@ export const TilingManager = GObject.registerClass({
 
             Logger.log(`[SMART RESIZE] tryFitWithResize: ${allWindows.length} windows (${allResizable.length} resizable), workArea: ${workArea.width}×${workArea.height}`);
             for (const [id, d] of windowData) {
-                Logger.log(`[SMART RESIZE]   ${id}: current=${d.current.width}×${d.current.height}, min=${d.min.width}×${d.min.height}, resizable=${d.isResizable}`);
+                Logger.log(`[SMART RESIZE]   ${id}(${d.window.get_wm_class()}): current=${d.current.width}×${d.current.height}, min=${d.min.width}×${d.min.height}, resizable=${d.isResizable}, addedTime=${WindowState.get(d.window, 'addedTime')}`);
             }
 
             // Interpolate between min and current sizes at factor t (1=current, 0=min)
@@ -2676,7 +2697,7 @@ export const TilingManager = GObject.registerClass({
 
                     candidateData.pendingMiniature = true;
                     candidateData.miniatureTargetSlot = null;
-                    Logger.log(`[MINIATURE] Marking ${candidateSim.id} as PENDING miniature (will be created after layout)`);
+                    Logger.log(`[MINIATURE] Marking ${candidateSim.id}(${candidateData.window.get_wm_class()}) as PENDING miniature (will be created after layout)`);
 
                     // candidateData.current can resolve to targetSmartResizeSize (already shrunk)
                     // when preferredSize/openingSize are both missing, so prefer those explicitly.
@@ -2734,7 +2755,7 @@ export const TilingManager = GObject.registerClass({
                         WindowState.set(w, 'isConstrainedByMosaic', false);
                         WindowState.set(w, 'targetSmartResizeSize', null);
                         WindowState.set(w, 'targetRestoredSize', { width: d.current.width, height: d.current.height });
-                        this._animateResize(w, frame, d.current.width, d.current.height);
+                        this._animateResize(w, frame, d.current.width, d.current.height, true);
                         grownWindows.push(w);
                         Logger.log(`[SMART RESIZE] ${sim.id}: grow back ${frame.width}×${frame.height} → ${d.current.width}×${d.current.height}`);
                     }
@@ -2754,7 +2775,7 @@ export const TilingManager = GObject.registerClass({
                     continue;
                 }
 
-                this._animateResize(w, frame, sim.width, sim.height);
+                this._animateResize(w, frame, sim.width, sim.height, true);
                 Logger.log(`[SMART RESIZE] ${sim.id}: ${d.current.width}×${d.current.height} → ${sim.width}×${sim.height}`);
             }
 
@@ -2839,7 +2860,7 @@ export const TilingManager = GObject.registerClass({
                     if (!d.isResizable) continue;
                     const frame = w.get_frame_rect();
                     WindowState.set(w, 'isSmartResizing', true);
-                    this._animateResize(w, frame, d.current.width, d.current.height);
+                    this._animateResize(w, frame, d.current.width, d.current.height, true);
                     WindowState.set(w, 'isSmartResizing', false);
                     WindowState.set(w, 'targetSmartResizeSize', null);
                     WindowState.set(w, 'isConstrainedByMosaic', false);
@@ -2896,7 +2917,7 @@ export const TilingManager = GObject.registerClass({
                 WindowState.set(w, 'targetSmartResizeSize', { width: sim.width, height: sim.height });
                 WindowState.set(w, 'isConstrainedByMosaic', true);
 
-                this._animateResize(w, frame, sim.width, sim.height);
+                this._animateResize(w, frame, sim.width, sim.height, true);
                 Logger.log(`[SMART RESIZE] Rebal ${sim.id}: → ${sim.width}×${sim.height}`);
             }
 
