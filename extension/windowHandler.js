@@ -792,6 +792,29 @@ export const WindowHandler = GObject.registerClass({
         Logger.log(`Smart resize failed or skipped - applying Overflow logic (existingWindows=${existingWindows.length}, blocked=${this.tilingManager._isSmartResizingBlocked})`);
         return await this.windowingManager.moveOversizedWindow(window);
     }
+
+    // A window opening alone should keep Mutter's native animation instead of
+    // getting hidden and swapped for our fade-only entrance, since there's nothing
+    // to slide in against. onWindowCreated and onWindowAdded both call this and need
+    // to agree, so the result is cached instead of each side recomputing on its own
+    // (workspace/monitor can resolve differently by the time the second one runs,
+    // and disagreeing would leave the actor hidden with no entrance ever claimed).
+    // Defaults to true when workspace/monitor aren't ready yet, since losing a real
+    // slide-in is more noticeable than an unnecessary one.
+    _hasSiblings(window) {
+        const cached = WindowState.get(window, 'hasEntranceSiblings');
+        if (cached !== undefined) return cached;
+
+        const workspace = window.get_workspace();
+        const monitor = window.get_monitor();
+        if (!workspace || monitor === null || monitor < 0) return true;
+
+        const result = this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor)
+            .some(w => w.get_id() !== window.get_id());
+        WindowState.set(window, 'hasEntranceSiblings', result);
+        return result;
+    }
+
     onWindowCreated(window) {
         this.windowingManager.invalidateWindowsCache();
 
@@ -911,17 +934,18 @@ export const WindowHandler = GObject.registerClass({
         if (actor) {
             const isRelated = this.windowingManager.isRelated(window);
             const skipSlideIn = WindowState.get(window, 'movedByOverflow') || this._ext._overflowInProgress
-                || this.windowingManager.isMaximizedOrFullscreen(window);
+                || this.windowingManager.isMaximizedOrFullscreen(window)
+                || !this._hasSiblings(window);
             if (isRelated && !skipSlideIn) {
                 // Ask Mutter to skip its own open animation outright (the same public
                 // API altTab.js uses to skip the unminimize effect) instead of fighting
-                // it after the fact - our own pipeline drives the entrance once it knows
+                // it after the fact. Our own pipeline drives the entrance once it knows
                 // the real tiled target and siblings, on its own timeline.
                 Main.wm.skipNextEffect(actor);
 
                 // onWindowAdded tries to hide the actor too, but it usually runs before
                 // the actor even exists yet (get_compositor_private() is still null there
-                // most of the time) - this is the first point we're guaranteed to have it,
+                // most of the time). This is the first point we're guaranteed to have it,
                 // so the fade-in actually has something to fade from instead of starting
                 // (and silently staying) at the default opacity of 255.
                 actor.opacity = 0;
@@ -1026,17 +1050,19 @@ export const WindowHandler = GObject.registerClass({
         // have a real visual position. onWindowCreated separately asks Mutter to
         // skip its own open animation (skipNextEffect) and nudges animateWindow's
         // deferred entrance once the actor is actually mapped.
-        // Sacred (maximized/fullscreen) windows never reach animateReTiling at all -
-        // _getWorkingInfo short-circuits tileWorkspaceWindows for them entirely - so
+        // Sacred (maximized/fullscreen) windows never reach animateReTiling at all.
+        // _getWorkingInfo short-circuits tileWorkspaceWindows for them entirely, so
         // claiming their entrance here would only suppress Mutter's own working
-        // native maximize animation without ever supplying a replacement.
+        // native maximize animation without ever supplying a replacement. Same deal
+        // for a window opening alone (see _hasSiblings): nothing to slide in next to.
         const skipSlideIn = WindowState.get(window, 'movedByOverflow') || this._ext._overflowInProgress
-            || this.windowingManager.isMaximizedOrFullscreen(window);
+            || this.windowingManager.isMaximizedOrFullscreen(window)
+            || !this._hasSiblings(window);
         if (!skipSlideIn) {
             WindowState.set(window, 'pendingFirstPlacement', true);
             const actor = window.get_compositor_private();
             // onWindowCreated races independently and may have already started (or
-            // queued) the real entrance ease by the time this runs - resetting opacity
+            // queued) the real entrance ease by the time this runs. Resetting opacity
             // here would stomp that mid-flight (a direct property write the ease's own
             // next frame then overwrites again), which is exactly what shows up as a blink.
             if (actor && !this._ext.animationsManager.hasActiveOrPendingEntrance(window))
@@ -1045,7 +1071,7 @@ export const WindowHandler = GObject.registerClass({
             // Failsafe: if animateWindow never claims this window (e.g. excluded
             // right after creation), don't leave it invisible or the flag stuck.
             // pendingFirstPlacement stays true for the entire span of a genuinely
-            // running ease (cleared only by its own onStopped) - a slowed-down
+            // running ease (cleared only by its own onStopped), and a slowed-down
             // slow_down_factor easily outlasts this fixed timeout, so re-arm instead
             // of yanking opacity to its final value out from under an ease that's
             // still legitimately mid-flight.
