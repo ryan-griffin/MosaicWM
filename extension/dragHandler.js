@@ -218,55 +218,65 @@ export const DragHandler = GObject.registerClass({
             }
 
             if (isMoveGrabOp(grabpo) && this._currentZone !== TileZone.NONE) {
-                Logger.log(`Edge tiling: applying zone ${this._currentZone}`);
                 const workspace = window.get_workspace();
                 const monitor = global.display.get_current_monitor();
                 const workArea = workspace.get_work_area_for_monitor(monitor);
-                
-                const occupiedWindow = this.edgeTilingManager.getWindowInZone(this._currentZone, workspace, monitor);
-                
-                if (occupiedWindow && occupiedWindow.get_id() !== window.get_id()) {
-                    Logger.log(`DnD: zone ${this._currentZone} occupied by ${occupiedWindow.get_id()}, swapping`);
-                    
-                    this._skipNextTiling = window.get_id();
-                    
-                    const success = this.swappingManager.swapWindows(window, occupiedWindow, this._currentZone, workspace, monitor);
-                    Logger.log(`DnD swap result = ${success}`);
-                    
-                    if (success) {
-                        this._timeoutRegistry.add(constants.RETILE_DELAY_MS, () => {
-                            this._skipNextTiling = null;
-                            return GLib.SOURCE_REMOVE;
-                        }, 'dragHandler_skipTilingSwap');
-                    } else {
-                        this._skipNextTiling = null;
-                    }
+
+                // Re-verify the mouse is actually in the zone at release time.
+                // _currentZone is updated via an idle so it can lag behind the real pointer
+                // position: if the user exits the zone and releases before the idle fires,
+                // _currentZone is still non-NONE and applyTile would fire incorrectly.
+                const [curX, curY] = global.get_pointer();
+                const actualZone = this.edgeTilingManager.detectZone(curX, curY, workArea, workspace);
+                if (actualZone === TileZone.NONE) {
+                    Logger.log(`Edge tiling: grab released outside zone (pointer at ${curX},${curY}), cancelling`);
+                    this.clearGhostWindows();
                 } else {
-                    Logger.log(`DnD: zone ${this._currentZone} empty, applying tile`);
+                    Logger.log(`Edge tiling: applying zone ${this._currentZone}`);
+                    const occupiedWindow = this.edgeTilingManager.getWindowInZone(this._currentZone, workspace, monitor);
 
-                    this._skipNextTiling = window.get_id();
+                    if (occupiedWindow && occupiedWindow.get_id() !== window.get_id()) {
+                        Logger.log(`DnD: zone ${this._currentZone} occupied by ${occupiedWindow.get_id()}, swapping`);
 
-                    const success = this.edgeTilingManager.applyTile(window, this._currentZone, workArea);
-                    Logger.log(`Edge tiling: apply result = ${success}`);
+                        this._skipNextTiling = window.get_id();
 
-                    if (success) {
-                        if (this._previewMiniaturizedWindows.length > 0) {
-                            Logger.log(`Edge tile confirmed - committing ${this._previewMiniaturizedWindows.length} preview miniatures`);
-                            this._commitPreviewMini();
-                        }
+                        const success = this.swappingManager.swapWindows(window, occupiedWindow, this._currentZone, workspace, monitor);
+                        Logger.log(`DnD swap result = ${success}`);
 
-                        this._timeoutRegistry.add(constants.RETILE_DELAY_MS, () => {
+                        if (success) {
+                            this._timeoutRegistry.add(constants.RETILE_DELAY_MS, () => {
+                                this._skipNextTiling = null;
+                                return GLib.SOURCE_REMOVE;
+                            }, 'dragHandler_skipTilingSwap');
+                        } else {
                             this._skipNextTiling = null;
-                            return GLib.SOURCE_REMOVE;
-                        }, 'dragHandler_skipTilingApply');
+                        }
                     } else {
-                        // Edge tile failed - clear ghosts
-                        this.clearGhostWindows();
-                        this._skipNextTiling = null;
+                        Logger.log(`DnD: zone ${this._currentZone} empty, applying tile`);
+
+                        this._skipNextTiling = window.get_id();
+
+                        const success = this.edgeTilingManager.applyTile(window, this._currentZone, workArea);
+                        Logger.log(`Edge tiling: apply result = ${success}`);
+
+                        if (success) {
+                            if (this._previewMiniaturizedWindows.length > 0) {
+                                Logger.log(`Edge tile confirmed - committing ${this._previewMiniaturizedWindows.length} preview miniatures`);
+                                this._commitPreviewMini();
+                            }
+
+                            this._timeoutRegistry.add(constants.RETILE_DELAY_MS, () => {
+                                this._skipNextTiling = null;
+                                return GLib.SOURCE_REMOVE;
+                            }, 'dragHandler_skipTilingApply');
+                        } else {
+                            this.clearGhostWindows();
+                            this._skipNextTiling = null;
+                        }
                     }
                 }
-            } 
-            
+            }
+
             this.drawingManager.hideTilePreview();
             this._draggedWindow = null;
             this._currentZone = TileZone.NONE;

@@ -533,7 +533,14 @@ export const ResizeHandler = GObject.registerClass({
                     this._sizeChanged = false;
                     return;
                 }
-                
+
+                // draw() repositions windows via move_resize_frame during a drag; those geometry
+                // changes must not trigger overflow ejection. The drag handler owns all overflow decisions.
+                if (this.tilingManager.isDragging) {
+                    this._sizeChanged = false;
+                    return;
+                }
+
                 const mosaicWindows = this.windowingManager.getMonitorWorkspaceWindows(workspace, monitor)
                     .filter(w => !this.edgeTilingManager.isEdgeTiled(w) && !this.windowingManager.isExcluded(w));
                 const isSolo = mosaicWindows.length <= 1;
